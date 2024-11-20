@@ -129,29 +129,53 @@ impl<'a> Parser<'a> {
     }
 
     fn get_type_from_token(&self, token: Token<'a>) -> Result<Type, ParserError<'a>> {
-        Ok(match token {
-            Token::Number(inner) => match inner {
-                NumberType::U8 => Type::U8,
-                NumberType::U16 => Type::U16,
-                NumberType::U32 => Type::U32,
-                NumberType::U64 => Type::U64,
-                NumberType::U128 => Type::U128,
-                NumberType::U256 => Type::U256,
-            },
-            Token::String => Type::String,
-            Token::Bool => Type::Bool,
-            Token::Optional(inner) => Type::Optional(Box::new(self.get_type_from_token(*inner)?)),
-            Token::Range(inner) => Type::Range(Box::new(self.get_type_from_token(*inner)?)),
+    let mut current_token = token;
+    let mut optional_stack = Vec::new();
+    let mut range_stack = Vec::new();
+
+    loop {
+        match current_token {
+            Token::Number(inner) => {
+                return Ok(match inner {
+                    NumberType::U8 => Type::U8,
+                    NumberType::U16 => Type::U16,
+                    NumberType::U32 => Type::U32,
+                    NumberType::U64 => Type::U64,
+                    NumberType::U128 => Type::U128,
+                    NumberType::U256 => Type::U256,
+                });
+            }
+            Token::String => return Ok(Type::String),
+            Token::Bool => return Ok(Type::Bool),
+            Token::Optional(ref inner) => {
+                optional_stack.push(current_token.clone());
+                current_token = *inner.clone();
+            }
+            Token::Range(ref inner) => {
+                range_stack.push(current_token.clone());
+                current_token = *inner.clone();
+            }
             Token::Identifier(id) => {
                 if let Ok(v) = self.struct_manager.get_by_name(id) {
-                    Type::Struct(v.inner().clone())
+                    let mut type_result = Type::Struct(v.inner().clone());
+                    
+                    while let Some(_) = optional_stack.pop() {
+                        type_result = Type::Optional(Box::new(type_result));
+                    }
+
+                    while let Some(_) = range_stack.pop() {
+                        type_result = Type::Range(Box::new(type_result));
+                    }
+
+                    return Ok(type_result);
                 } else {
-                    return Err(ParserError::StructNotFound(id))
+                    return Err(ParserError::StructNotFound(id));
                 }
-            },
-            token => return Err(ParserError::UnexpectedToken(token))
-        })
+            }
+            token => return Err(ParserError::UnexpectedToken(token)),
+        }
     }
+}
 
     /**
      * Example: let message: string[] = ["hello", "world", "!"];
@@ -198,74 +222,115 @@ impl<'a> Parser<'a> {
 
     // this function don't verify, but only returns the type of an expression
     // all tests should be done when constructing an expression, not here
-    fn get_type_from_expression_internal<'b>(&'b self, on_type: Option<&Type>, expression: &'b Expression, context: &'b Context<'a>) -> Result<Option<Cow<'b, Type>>, ParserError<'a>> {
-        let _type: Cow<'b, Type> = match expression {
-            Expression::ArrayConstructor(ref values) => match values.first() {
-                Some(v) => Cow::Owned(Type::Array(Box::new(self.get_type_from_expression(on_type, v, context)?.into_owned()))),
-                None => return Err(ParserError::EmptyArrayConstructor) // cannot determine type from empty array
-            },
-            Expression::Variable(ref var_name) => match on_type {
-                Some(t) => {
-                    if let Type::Struct(_type) = t {
-                        let index = *var_name as usize;
-                        if let Some(field_type) = _type.fields().get(index) {
-                            Cow::Owned(field_type.clone())
-                        } else {
-                            return Err(ParserError::UnexpectedMappedVariableId(var_name.clone()))
-                        }
-                    } else {
-                        return Err(ParserError::UnexpectedMappedVariableId(var_name.clone()))
-                    }
-                },
-                None => Cow::Borrowed(context.get_type_of_variable(var_name)?),
-            },
-            Expression::FunctionCall(path, name, _) => {
+fn get_type_from_expression_internal<'b>(
+    &'b self,
+    on_type: Option<&Type>,
+    expression: &'b Expression,
+    context: &'b Context<'a>,
+) -> Result<Option<Cow<'b, Type>>, ParserError<'a>> {
+    let mut stack: Vec<(&'b Expression, Option<&Type>)> = vec![(expression, on_type)];
+    let mut current_type: Option<Cow<'b, Type>> = None;
+
+    while let Some((expr, current_on_type)) = stack.pop() {
+        match expr {
+            Expression::ArrayConstructor(ref values) => {
+                if let Some(first) = values.first() {
+                    stack.push((first, current_on_type));
+                    current_type = Some(Cow::Owned(Type::Array(Box::new(
+                        current_type.take().unwrap().into_owned(),
+                    ))));
+                } else {
+                    return Err(ParserError::EmptyArrayConstructor);
+                }
+            }
+            Expression::Variable(ref var_name) => match current_on_type {
+    Some(Type::Struct(_type)) => {
+        let index = *var_name as usize;
+        if let Some(field_type) = _type.fields().get(index) {
+            current_type = Some(Cow::Owned(field_type.clone()));
+        } else {
+            return Err(ParserError::UnexpectedMappedVariableId(var_name.clone()));
+        }
+    }
+    Some(Type::U8)
+    | Some(Type::U16)
+    | Some(Type::U32)
+    | Some(Type::U64)
+    | Some(Type::U128)
+    | Some(Type::Bool)
+    | Some(Type::String) => {
+        // Handle primitive types if needed or return an error
+       return Err(ParserError::UnexpectedTypeForVariable(format!(
+    "Unexpected type for variable: {:?}",
+    current_on_type
+)));
+
+
+    }
+    None => {
+        current_type = Some(Cow::Borrowed(context.get_type_of_variable(var_name)?));
+    }
+    _ => return Err(ParserError::UnexpectedMappedVariableId(var_name.clone())),
+},
+
+            Expression::FunctionCall(ref path, name, _) => {
                 let f = self.get_function(*name)?;
                 let return_type = f.return_type();
                 match return_type {
-                    Some(ref v) => match v {
-                        Type::T => match on_type {
-                            Some(t) => Cow::Owned(t.get_inner_type().clone()),
-                            None => match path {
-                                Some(p) => Cow::Owned(self.get_type_from_expression(on_type, p, context)?.get_inner_type().clone()),
-                                None => return Err(ParserError::InvalidTypeT)
+                    Some(Type::T) => match current_on_type {
+                        Some(t) => {
+                            current_type = Some(Cow::Owned(t.get_inner_type().clone()));
+                        }
+                        None => {
+                            if let Some(p) = path {
+                                stack.push((p, current_on_type));
+                                continue;
+                            }
+                            return Err(ParserError::InvalidTypeT);
+                        }
+                    },
+                    Some(Type::Optional(inner)) => match inner.as_ref() {
+                        Type::T => match current_on_type {
+                            Some(t) => {
+                                current_type =
+                                    Some(Cow::Owned(Type::Optional(Box::new(t.get_inner_type().clone()))));
+                            }
+                            None => {
+                                if let Some(p) = path {
+                                    stack.push((p, current_on_type));
+                                    continue;
+                                }
+                                return Err(ParserError::InvalidTypeT);
                             }
                         },
-                        Type::Optional(inner) => match inner.as_ref() {
-                            Type::T => match on_type {
-                                Some(t) => Cow::Owned(Type::Optional(Box::new(t.get_inner_type().clone()))),
-                                None => match path {
-                                    Some(p) => Cow::Owned(Type::Optional(Box::new(self.get_type_from_expression(on_type, p, context)?.get_inner_type().clone()))),
-                                    None => return Err(ParserError::InvalidTypeT)
-                                }
-                            },
-                            _ => Cow::Owned(v.clone())
-                        },
-                        _ => Cow::Owned(v.clone())
+                        _ => {
+                           current_type = Some(Cow::Owned(*inner.clone()));
+
+                        }
                     },
-                    None => return Err(ParserError::FunctionNoReturnType)
+                    Some(v) => current_type = Some(Cow::Owned(v.clone())),
+                    None => return Err(ParserError::FunctionNoReturnType),
                 }
-            },
-            // we have to clone everything due to this
-            Expression::Value(ref val) => match Type::from_value(val) {
-                Some(v) => Cow::Owned(v),
-                None => return Ok(None)
-            },
+            }
             Expression::ArrayCall(path, _) => {
-                match self.get_type_from_expression(on_type, path, context)?.into_owned() {
-                    Type::Array(_type) => Cow::Owned(*_type),
-                    _ => return Err(ParserError::InvalidArrayCall)
+                stack.push((path, current_on_type));
+                if let Some(Type::Array(inner)) = current_type.take().map(|cow| cow.into_owned()) {
+                    current_type = Some(Cow::Owned(*inner));
+                } else {
+                    return Err(ParserError::InvalidArrayCall);
                 }
-            },
-            Expression::SubExpression(expr) => self.get_type_from_expression(on_type, expr, context)?,
-            Expression::StructConstructor(_, _type) => Cow::Owned(Type::Struct(_type.clone())),
+            }
+            Expression::SubExpression(expr) => {
+                stack.push((expr, current_on_type));
+            }
+            Expression::StructConstructor(_, struct_type) => {
+                current_type = Some(Cow::Owned(Type::Struct(struct_type.clone())));
+            }
             Expression::Path(left, right) => {
-                let var_type = self.get_type_from_expression(on_type, left, context)?;
-                self.get_type_from_expression(Some(&var_type), right, context)?
-            },
-            // Compatibility checks are done when constructing the expression
+                stack.push((right, current_on_type));
+                stack.push((left, current_on_type));
+            }
             Expression::Operator(op, left, right) => match op {
-                // Condition operators
                 Operator::Or
                 | Operator::Equals
                 | Operator::NotEquals
@@ -273,21 +338,18 @@ impl<'a> Parser<'a> {
                 | Operator::GreaterThan
                 | Operator::LessOrEqual
                 | Operator::LessThan
-                | Operator::And => Cow::Owned(Type::Bool),
-                // Assign operators
-                Operator::Assign(_) => return Err(ParserError::AssignReturnNothing),
-                // String compatible operators
+                | Operator::And => {
+                    current_type = Some(Cow::Owned(Type::Bool));
+                }
                 Operator::Plus | Operator::Minus => {
-                    let left_type = self.get_type_from_expression(on_type, left, context)?;
-                    let right_type = self.get_type_from_expression(on_type, right, context)?;
-
-                    if *left_type == Type::String || *right_type == Type::String {
-                        Cow::Owned(Type::String)
-                    } else {
-                        left_type
+                    stack.push((left, current_on_type));
+                    stack.push((right, current_on_type));
+                    if let Some(left_type) = current_type.take() {
+                        if left_type == Cow::Owned(Type::String) {
+                            current_type = Some(Cow::Owned(Type::String));
+                        }
                     }
-                },
-                // Number only operators
+                }
                 Operator::Multiply
                 | Operator::Divide
                 | Operator::BitwiseXor
@@ -296,24 +358,36 @@ impl<'a> Parser<'a> {
                 | Operator::BitwiseLeft
                 | Operator::BitwiseRight
                 | Operator::Rem => {
-                    let left_type = self.get_type_from_expression(on_type, left, context)?;
-                    let right_type = self.get_type_from_expression(on_type, right, context)?;
-
-                    if !left_type.is_number() || !right_type.is_number() || left_type != right_type {
-                        return Err(ParserError::InvalidOperationNotSameType(left_type.into_owned(), right_type.into_owned()))
-                    }
-                    left_type
+                    stack.push((left, current_on_type));
+                    stack.push((right, current_on_type));
+                }
+                _ => {
+                    return Err(ParserError::AssignReturnNothing);
                 }
             },
-            Expression::IsNot(_) => Cow::Owned(Type::Bool),
-            Expression::Ternary(_, expr, _) => self.get_type_from_expression(on_type, expr, context)?,
-            Expression::Cast(_, _type) => Cow::Borrowed(_type),
-            Expression::Range(start, _) => Cow::Owned(Type::Range(Box::new(self.get_type_from_expression(on_type, start, context)?.into_owned()))),
-        };
-
-        Ok(Some(_type))
+            Expression::Value(val) => match Type::from_value(val) {
+                Some(v) => current_type = Some(Cow::Owned(v)),
+                None => return Ok(None),
+            },
+            Expression::Ternary(_, expr, _) => {
+                stack.push((expr, current_on_type));
+            }
+            Expression::Cast(_, target_type) => {
+                current_type = Some(Cow::Borrowed(target_type));
+            }
+            Expression::Range(start, _) => {
+                stack.push((start, current_on_type));
+                if let Some(Type::Range(inner)) = current_type.take().map(|cow| cow.into_owned()) {
+                    current_type = Some(Cow::Owned(*inner));
+                }
+            }
+            _ => return Err(ParserError::NotImplemented),
+        }
     }
 
+    Ok(current_type)
+}
+ 
     // Read a function call with the following syntax:
     // function_name(param1, param2, ...)
     fn read_function_call(&mut self, path: Option<Expression>, on_type: Option<&Type>, name: &str, context: &mut Context<'a>) -> Result<Expression, ParserError<'a>> {
