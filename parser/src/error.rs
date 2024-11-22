@@ -68,7 +68,9 @@ pub enum ParserError<'a> {
     InvalidFunctionType(Type),
     EmptyArrayConstructor,
     ExpectedNumberType(Type),
-    InvalidNumberValueForType
+    InvalidNumberValueForType, 
+    InvalidOperatorExpression,
+    InvalidOperatorOperand
 }
 
 impl<'a> From<ValueError> for ParserError<'a> {
