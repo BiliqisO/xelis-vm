@@ -1,6 +1,6 @@
 use xelis_ast::{Expression, Token};
 use xelis_builder::BuilderError;
-use xelis_types::{Type, ValueError, IdentifierType};
+use xelis_types::{IdentifierType, Type, ValueError};
 
 #[derive(Debug)]
 pub enum ParserError<'a> {
@@ -68,9 +68,9 @@ pub enum ParserError<'a> {
     InvalidFunctionType(Type),
     EmptyArrayConstructor,
     ExpectedNumberType(Type),
-    InvalidNumberValueForType, 
+    InvalidNumberValueForType,
     InvalidOperatorExpression,
-    InvalidOperatorOperand
+    InvalidOperatorOperand,
 }
 
 impl<'a> From<ValueError> for ParserError<'a> {

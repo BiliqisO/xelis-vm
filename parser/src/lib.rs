@@ -1,39 +1,35 @@
 mod context;
 mod error;
 
+use context::Context;
 use std::{
     borrow::Cow,
-    collections::{HashSet, VecDeque}
-};
-use xelis_builder::{
-    EnvironmentBuilder,
-    FunctionMapper,
-    StructManager
+    collections::{HashSet, VecDeque},
 };
 use xelis_ast::*;
+use xelis_builder::{EnvironmentBuilder, FunctionMapper, StructManager};
 use xelis_environment::NativeFunction;
 use xelis_types::*;
-use context::Context;
 
 pub use error::ParserError;
 
 enum Function<'a> {
     Native(&'a NativeFunction),
-    Program(&'a FunctionType)
+    Program(&'a FunctionType),
 }
 
 impl<'a> Function<'a> {
     fn return_type(&self) -> &Option<Type> {
         match self {
             Function::Native(f) => f.return_type(),
-            Function::Program(f) => f.return_type()
+            Function::Program(f) => f.return_type(),
         }
     }
 
     fn is_entry(&self) -> bool {
         match self {
             Function::Program(f) => f.is_entry(),
-            _ => false
+            _ => false,
         }
     }
 }
@@ -56,6 +52,13 @@ pub struct Parser<'a> {
     // TODO: Path to use to import files
     // _path: Option<&'a str>
 }
+fn infer_type(expr: &Box<xelis_ast::Expression>) -> Option<Cow<'static, Type>> {
+    match **expr {
+        Expression::Value(Value::U64(_)) => Some(Cow::Owned(Type::U64)),
+        Expression::Value(Value::String(_)) => Some(Cow::Owned(Type::String)),
+        _ => None,
+    }
+}
 
 impl<'a> Parser<'a> {
     pub fn new(tokens: VecDeque<Token<'a>>, environment: &'a EnvironmentBuilder) -> Self {
@@ -67,7 +70,7 @@ impl<'a> Parser<'a> {
             functions: Vec::new(),
             functions_mapper,
             struct_manager: StructManager::with_parent(environment.get_struct_manager()),
-            environment
+            environment,
         }
     }
 
@@ -94,7 +97,7 @@ impl<'a> Parser<'a> {
     fn next_identifier(&mut self) -> Result<&'a str, ParserError<'a>> {
         match self.advance()? {
             Token::Identifier(id) => Ok(id),
-            token => Err(ParserError::ExpectedIdentifierToken(token))
+            token => Err(ParserError::ExpectedIdentifierToken(token)),
         }
     }
 
@@ -113,69 +116,72 @@ impl<'a> Parser<'a> {
     // Check if the next token is an identifier
     #[inline(always)]
     fn peek_is_identifier(&self) -> bool {
-        self.peek().ok().filter(|t| match t {
-            Token::Identifier(_) => true,
-            _ => false
-        }).is_some()
+        self.peek()
+            .ok()
+            .filter(|t| match t {
+                Token::Identifier(_) => true,
+                _ => false,
+            })
+            .is_some()
     }
 
     // Require a specific token
     fn expect_token(&mut self, expected: Token<'a>) -> Result<(), ParserError<'a>> {
         let token = self.advance()?;
         if token != expected {
-            return Err(ParserError::InvalidToken(token, expected)) 
+            return Err(ParserError::InvalidToken(token, expected));
         }
         Ok(())
     }
 
     fn get_type_from_token(&self, token: Token<'a>) -> Result<Type, ParserError<'a>> {
-    let mut current_token = token;
-    let mut optional_stack = Vec::new();
-    let mut range_stack = Vec::new();
+        let mut current_token = token;
+        let mut optional_stack = Vec::new();
+        let mut range_stack = Vec::new();
 
-    loop {
-        match current_token {
-            Token::Number(inner) => {
-                return Ok(match inner {
-                    NumberType::U8 => Type::U8,
-                    NumberType::U16 => Type::U16,
-                    NumberType::U32 => Type::U32,
-                    NumberType::U64 => Type::U64,
-                    NumberType::U128 => Type::U128,
-                    NumberType::U256 => Type::U256,
-                });
-            }
-            Token::String => return Ok(Type::String),
-            Token::Bool => return Ok(Type::Bool),
-            Token::Optional(ref inner) => {
-                optional_stack.push(current_token.clone());
-                current_token = *inner.clone();
-            }
-            Token::Range(ref inner) => {
-                range_stack.push(current_token.clone());
-                current_token = *inner.clone();
-            }
-            Token::Identifier(id) => {
-                if let Ok(v) = self.struct_manager.get_by_name(id) {
-                    let mut type_result = Type::Struct(v.inner().clone());
-                    
-                    while let Some(_) = optional_stack.pop() {
-                        type_result = Type::Optional(Box::new(type_result));
-                    }
-
-                    while let Some(_) = range_stack.pop() {
-                        type_result = Type::Range(Box::new(type_result));
-                    }
-
-                    return Ok(type_result);
-                } else {
-                    return Err(ParserError::StructNotFound(id));
+        loop {
+            match current_token {
+                Token::Number(inner) => {
+                    return Ok(match inner {
+                        NumberType::U8 => Type::U8,
+                        NumberType::U16 => Type::U16,
+                        NumberType::U32 => Type::U32,
+                        NumberType::U64 => Type::U64,
+                        NumberType::U128 => Type::U128,
+                        NumberType::U256 => Type::U256,
+                    });
                 }
+                Token::String => return Ok(Type::String),
+                Token::Bool => return Ok(Type::Bool),
+                Token::Optional(ref inner) => {
+                    optional_stack.push(current_token.clone());
+                    current_token = *inner.clone();
+                }
+                Token::Range(ref inner) => {
+                    range_stack.push(current_token.clone());
+                    current_token = *inner.clone();
+                }
+                Token::Identifier(id) => {
+                    if let Ok(v) = self.struct_manager.get_by_name(id) {
+                        let mut type_result = Type::Struct(v.inner().clone());
+
+                        while let Some(_) = optional_stack.pop() {
+                            type_result = Type::Optional(Box::new(type_result));
+                        }
+
+                        while let Some(_) = range_stack.pop() {
+                            type_result = Type::Range(Box::new(type_result));
+                        }
+
+                        return Ok(type_result);
+                    } else {
+                        return Err(ParserError::StructNotFound(id));
+                    }
+                }
+                token => return Err(ParserError::UnexpectedToken(token)),
             }
-            token => return Err(ParserError::UnexpectedToken(token)),
         }
     }
-}
 
     /**
      * Example: let message: string[] = ["hello", "world", "!"];
@@ -213,402 +219,625 @@ impl<'a> Parser<'a> {
     }
 
     // get the type of an expression
-    fn get_type_from_expression<'b>(&'b self, on_type: Option<&'b Type>, expression: &'b Expression, context: &'b Context<'a>) -> Result<Cow<'b, Type>, ParserError<'a>> {
+    fn get_type_from_expression<'b>(
+        &'b self,
+        on_type: Option<&'b Type>,
+        expression: &'b Expression,
+        context: &'b Context<'a>,
+    ) -> Result<Cow<'b, Type>, ParserError<'a>> {
         match self.get_type_from_expression_internal(on_type, expression, context)? {
             Some(v) => Ok(v),
-            None => Err(ParserError::EmptyValue)
+            None => Err(ParserError::EmptyValue),
         }
     }
 
     // this function don't verify, but only returns the type of an expression
     // all tests should be done when constructing an expression, not here
-fn get_type_from_expression_internal<'b>(
-    &'b self,
-    on_type: Option<&'b Type>,
-    expression: &'b Expression,
-    context: &'b Context<'a>,
-) -> Result<Option<Cow<'b, Type>>, ParserError<'a>> {
-    let mut stack: Vec<(&'b Expression, Option<&Type>)> = vec![(expression, on_type)];
-    let mut current_type: Option<Cow<'b, Type>> = None;
+    fn get_type_from_expression_internal<'b>(
+        &'b self,
+        on_type: Option<&'b Type>,
+        expression: &'b Expression,
+        context: &'b Context<'a>,
+    ) -> Result<Option<Cow<'b, Type>>, ParserError<'a>> {
+        let mut stack: Vec<(&'b Expression, Option<&Type>)> = vec![(expression, on_type)];
+        let mut current_type: Option<Cow<'b, Type>> = None;
 
-    while let Some((expr, current_on_type)) = stack.pop() {
-        match expr {
-            Expression::ArrayConstructor(ref values) => {
-                println!("Resolved type: 11"); // Logging for debugging
-            if values.is_empty() {
-                // If the array is empty, check if the type is explicitly defined
-                if let Some(Type::Array(inner)) = current_on_type {
-                    current_type = Some(Cow::Owned(Type::Array(inner.clone())));
-                } else {
-                    return Err(ParserError::EmptyArrayConstructor);
-                }
-            } else {
-                // Use a stack to iteratively check all elements
-                let mut stack: Vec<&Expression> = values.iter().collect();
-                let mut array_type: Option<Type> = None;
-
-                while let Some(current_expr) = stack.pop() {
-                    // Process the current expression to determine its type
-                    let element_type = match *current_expr {
-                        Expression::Value(ref val) => {
-                            Type::from_value(val).ok_or(ParserError::EmptyArrayConstructor)?
-                        }
-                        Expression::Variable(ref var_name) => {
-                            context.get_type_of_variable(var_name)?.clone()
-                        }
-                        _ => return Err(ParserError::EmptyArrayConstructor), // Handle other cases if needed
-            };
-
-                    // Check type consistency
-                    match array_type {
-                        Some(ref ty) if *ty != element_type => {
+        while let Some((expr, current_on_type)) = stack.pop() {
+            match expr {
+                Expression::ArrayConstructor(ref values) => {
+                    if values.is_empty() {
+                        // If the array is empty, check if the type is explicitly defined
+                        if let Some(Type::Array(inner)) = current_on_type {
+                            current_type = Some(Cow::Owned(Type::Array(inner.clone())));
+                        } else {
                             return Err(ParserError::EmptyArrayConstructor);
                         }
-                        _ => array_type = Some(element_type),
+                    } else {
+                        // Use a stack to iteratively check all elements
+                        let mut stack: Vec<&Expression> = values.iter().collect();
+                        let mut array_type: Option<Type> = None;
+
+                        while let Some(current_expr) = stack.pop() {
+                            // Process the current expression to determine its type
+                            let element_type = match *current_expr {
+                                Expression::Value(ref val) => Type::from_value(val)
+                                    .ok_or(ParserError::EmptyArrayConstructor)?,
+                                Expression::Variable(ref var_name) => {
+                                    context.get_type_of_variable(var_name)?.clone()
+                                }
+                                _ => return Err(ParserError::EmptyArrayConstructor), // Handle other cases if needed
+                            };
+
+                            // Check type consistency
+                            match array_type {
+                                Some(ref ty) if *ty != element_type => {
+                                    return Err(ParserError::EmptyArrayConstructor);
+                                }
+                                _ => array_type = Some(element_type),
+                            }
+                        }
+
+                        // If all elements have consistent types, set the array type
+                        if let Some(final_type) = array_type {
+                            current_type = Some(Cow::Owned(Type::Array(Box::new(final_type))));
+                        } else {
+                            return Err(ParserError::EmptyArrayConstructor);
+                        }
                     }
                 }
-
-                // If all elements have consistent types, set the array type
-                if let Some(final_type) = array_type {
-                    current_type = Some(Cow::Owned(Type::Array(Box::new(final_type))));
-                } else {
-                    return Err(ParserError::EmptyArrayConstructor);
-                }
-            }
-        },
-            Expression::Variable(ref var_name) => match on_type {
-                                Some(t) => {
-                                    
-                                    if let Type::Struct(_type) = t {
-                                        let index = *var_name as usize;
-                                if let Some(field_type) = _type.fields().get(index) {
+                Expression::Variable(ref var_name) => match on_type {
+                    Some(t) => {
+                        if let Type::Struct(_type) = t {
+                            let index = *var_name as usize;
+                            if let Some(field_type) = _type.fields().get(index) {
                                 current_type = Some(Cow::Owned(field_type.clone()));
-                                } else {
-                                    return Err(ParserError::UnexpectedMappedVariableId(var_name.clone()))
-                                }
                             } else {
-                                return Err(ParserError::UnexpectedMappedVariableId(var_name.clone()))
+                                return Err(ParserError::UnexpectedMappedVariableId(
+                                    var_name.clone(),
+                                ));
                             }
-                        },
-                        None => current_type = Some(Cow::Borrowed(context.get_type_of_variable(var_name)?)),
-        },
-            Expression::FunctionCall(path, name, _) => {
-                    println!("Resolving FunctionCall");
+                        } else {
+                            return Err(ParserError::UnexpectedMappedVariableId(var_name.clone()));
+                        }
+                    }
+                    None => {
+                        current_type = Some(Cow::Borrowed(context.get_type_of_variable(var_name)?))
+                    }
+                },
+                Expression::FunctionCall(path, name, _) => {
                     let f = self.get_function(*name)?;
                     let return_type = f.return_type();
 
                     match return_type {
                         Some(ref v) => match v {
-                    Type::T => {
-                        if let Some(context_type) = current_on_type {
-                            current_type = Some(Cow::Owned(context_type.get_inner_type().clone()));
-                        } else if let Some(p) = path {
-                            let mut path_stack: Vec<&Expression> = vec![p];
-                            let mut resolved_type: Option<Cow<'b, Type>> = None;
+                            Type::T => {
+                                if let Some(context_type) = current_on_type {
+                                    current_type =
+                                        Some(Cow::Owned(context_type.get_inner_type().clone()));
+                                } else if let Some(p) = path {
+                                    let mut path_stack: Vec<&Expression> = vec![p];
+                                    let mut resolved_type: Option<Cow<'b, Type>> = None;
 
-                            while let Some(path_expr) = path_stack.pop() {
-                                match path_expr {
-                                    Expression::Variable(var_name) => {
-                                        resolved_type = Some(Cow::Borrowed(context.get_type_of_variable(var_name)?));
-                                        
+                                    while let Some(path_expr) = path_stack.pop() {
+                                        match path_expr {
+                                            Expression::Variable(var_name) => {
+                                                resolved_type = Some(Cow::Borrowed(
+                                                    context.get_type_of_variable(var_name)?,
+                                                ));
+                                            }
+                                            Expression::Path(left, right) => {
+                                                path_stack.push(right);
+                                                path_stack.push(left);
+                                            }
+                                            _ => resolved_type = Some(Cow::Owned(v.clone())),
+                                        }
                                     }
-                                    Expression::Path(left, right) => {
-                                        path_stack.push(right);
-                                        path_stack.push(left);
+
+                                    if let Some(resolved) = resolved_type {
+                                        current_type = Some(Cow::Owned(resolved.into_owned()));
+                                    } else {
+                                        return Err(ParserError::InvalidTypeT);
                                     }
-                                    _ => { 
-                                resolved_type = Some(Cow::Owned(v.clone()))
-                                },
+                                } else {
+                                    return Err(ParserError::InvalidTypeT);
                                 }
                             }
+                            Type::Optional(inner) => match inner.as_ref() {
+                                Type::T => {
+                                    if let Some(context_type) = current_on_type {
+                                        current_type = Some(Cow::Owned(Type::Optional(Box::new(
+                                            context_type.get_inner_type().clone(),
+                                        ))));
+                                    } else if let Some(p) = path {
+                                        let mut path_stack: Vec<&Expression> = vec![p];
+                                        let mut resolved_type: Option<Cow<'b, Type>> = None;
 
-                            if let Some(resolved) = resolved_type {
-                                current_type = Some(Cow::Owned(resolved.into_owned()));
-                            } else {
-                            
-                                return Err(ParserError::InvalidTypeT);
+                                        while let Some(path_expr) = path_stack.pop() {
+                                            match path_expr {
+                                                Expression::Variable(var_name) => {
+                                                    resolved_type = Some(Cow::Borrowed(
+                                                        context.get_type_of_variable(var_name)?,
+                                                    ));
+                                                }
+                                                Expression::Path(left, right) => {
+                                                    path_stack.push(right);
+                                                    path_stack.push(left);
+                                                }
+                                                _ => {
+                                                    current_type = Some(Cow::Owned(*inner.clone()));
+                                                    return Ok(current_type);
+                                                }
+                                            }
+                                        }
+                                        if let Some(resolved) = resolved_type {
+                                            match resolved.into_owned() {
+                                                Type::Array(inner_array_type) => {
+                                                    current_type = Some(Cow::Owned(
+                                                        Type::Optional(inner_array_type),
+                                                    ));
+                                                }
+                                                other_type => {
+                                                    current_type = Some(Cow::Owned(
+                                                        Type::Optional(Box::new(other_type)),
+                                                    ));
+                                                }
+                                            }
+                                        } else {
+                                            current_type = Some(Cow::Owned(*inner.clone()));
+
+                                            return Ok(current_type);
+                                        }
+                                    } else {
+                                        current_type = Some(Cow::Owned(v.clone()));
+                                        return Ok(current_type);
+                                    }
+                                }
+                                _ => {
+                                    current_type = Some(Cow::Owned(*inner.clone()));
+                                }
+                            },
+                            _ => {
+                                current_type = Some(Cow::Owned(v.clone()));
                             }
-                        } else {
-                            
-                            return Err(ParserError::InvalidTypeT);
-                        }
+                        },
+                        None => return Err(ParserError::FunctionNoReturnType),
                     }
-                    Type::Optional(inner) => match inner.as_ref() {
-                        Type::T => {
-                            if let Some(context_type) = current_on_type {
-                                current_type = Some(Cow::Owned(Type::Optional(Box::new(context_type.get_inner_type().clone()))));
-                            } else if let Some(p) = path {
-                                let mut path_stack: Vec<&Expression> = vec![p];
-                                let mut resolved_type: Option<Cow<'b, Type>> = None;
+                }
 
-                                while let Some(path_expr) = path_stack.pop() {
-                                    match path_expr {
-                                        Expression::Variable(var_name) => { 
-                                            resolved_type = Some(Cow::Borrowed(context.get_type_of_variable(var_name)?));
+                Expression::ArrayCall(path, _) => {
+                    let mut stack: Vec<&Expression> = vec![path];
+                    let mut current_type: Option<Cow<'b, Type>> = None;
 
-                                            println!("current_terpe {:?}", resolved_type);
+                    while let Some(current_expr) = stack.pop() {
+                        match current_expr {
+                            Expression::Variable(var_name) => {
+                                if let Some(_type) = current_type.as_ref() {
+                                    match _type.as_ref() {
+                                        Type::Array(inner_type) => {
+                                            current_type = Some(Cow::Owned(*inner_type.clone()));
                                         }
-                                        Expression::Path(left, right) => {
-                                            path_stack.push(right);
-                                            path_stack.push(left);
-                                        }
-                                        _ =>{ 
-                                current_type = Some(Cow::Owned(*inner.clone()));
-                                return Ok(current_type);
-                            
-                                        },
-                                    }
-                                }
-                                if let Some(resolved) = resolved_type {
-                                    match resolved.into_owned() {
-                                        Type::Array(inner_array_type) => {
-                                            current_type = Some(Cow::Owned(Type::Optional(inner_array_type)));
-                                            println!("current_tpe {:?}", current_type);
-                                        }
-                                        other_type => {
-                                            current_type = Some(Cow::Owned(Type::Optional(Box::new(other_type))));
+                                        _ => {
+                                            return Err(ParserError::InvalidArrayCall);
                                         }
                                     }
                                 } else {
-                                current_type = Some(Cow::Owned(*inner.clone()));
-                                println!("current_tpe {:?}", current_type);
-                                return  Ok(current_type);
+                                    current_type = Some(Cow::Borrowed(
+                                        context.get_type_of_variable(var_name)?,
+                                    ));
                                 }
-                            } else {
-                                current_type = Some(Cow::Owned(v.clone()));
-                                return  Ok(current_type);
+                            }
+                            Expression::Path(left_expr, right_expr) => {
+                                stack.push(right_expr);
+                                stack.push(left_expr);
+                            }
+                            Expression::FunctionCall(ref func_path, func_name, func_args) => {
+                                // Store the return type in a longer-lived variable
+                                let function = self.get_function(*func_name)?;
+                                let function_type = function.return_type();
+
+                                match function_type {
+                                    Some(ref v) => match v {
+                                        Type::T => {
+                                            // Handle Type::T logic here
+                                            if let Some(t) = current_type.as_ref() {
+                                                current_type = Some(t.clone()); // Directly use t.clone() without wrapping in Cow::Owned
+                                            } else {
+                                                return Err(ParserError::InvalidTypeT);
+                                            }
+                                        }
+                                        Type::Optional(inner) => {
+                                            // Handle Optional logic
+                                            current_type =
+                                                Some(Cow::Owned(Type::Optional(inner.clone())));
+                                        }
+                                        _ => {
+                                            current_type = Some(Cow::Owned(v.clone()));
+                                        }
+                                    },
+                                    None => return Err(ParserError::FunctionNoReturnType),
+                                }
+                            }
+
+                            Expression::ArrayConstructor(_) => {
+                                return Err(ParserError::InvalidArrayCall);
+                            }
+                            _ => {
+                                return Err(ParserError::InvalidArrayCall);
                             }
                         }
-                        _ => {
-                            current_type = Some(Cow::Owned(*inner.clone()));
-                        }
-                    },
-                    _ => {
-                        current_type = Some(Cow::Owned(v.clone()));
                     }
-                },
-                None => return Err(ParserError::FunctionNoReturnType),
-            }
-        },
 
+                    if let Some(resolved) = current_type {
+                        match resolved.into_owned() {
+                            Type::Array(inner_type) => {
+                                current_type = Some(Cow::Owned(*inner_type));
+                            }
+                            _ => return Err(ParserError::InvalidArrayCall),
+                        }
+                    } else {
+                        return Err(ParserError::InvalidArrayCall);
+                    }
 
-            
-            Expression::ArrayCall(path, _) => {
-                println!("Resolved type:8 "); // Logging for debugging
-                let mut stack: Vec<&Expression> = vec![path];
-                let mut current_type: Option<Cow<'b, Type>> = None;
+                    return Ok(current_type);
+                }
 
-                while let Some(current_expr) = stack.pop() {
-                    match current_expr {
-                        Expression::Variable(var_name) => {
-                            if let Some(_type) = current_type.as_ref() {
-                                match _type.as_ref() {
-                                    Type::Array(inner_type) => {
-                                        current_type = Some(Cow::Owned(*inner_type.clone()));
+                Expression::SubExpression(expr) => {
+                    stack.push((expr, current_on_type));
+                }
+                Expression::StructConstructor(_, struct_type) => {
+                    current_type = Some(Cow::Owned(Type::Struct(struct_type.clone())));
+                }
+
+                Expression::Path(left, right) => {
+                    let mut stack: Vec<&Expression> = vec![right, left];
+                    let mut resolved_type: Option<Cow<'b, Type>> = on_type.map(Cow::Borrowed);
+
+                    while let Some(current_expr) = stack.pop() {
+                        match current_expr {
+                            Expression::Variable(var_name) => {
+                                if let Some(existing_type) = resolved_type.as_ref() {
+                                    match existing_type.as_ref() {
+                                        Type::Struct(struct_type) => {
+                                            let field_index = *var_name as usize;
+                                            if let Some(field_type) =
+                                                struct_type.fields().get(field_index)
+                                            {
+                                                resolved_type =
+                                                    Some(Cow::Owned(field_type.clone()));
+                                            } else {
+                                                return Err(
+                                                    ParserError::UnexpectedMappedVariableId(
+                                                        var_name.clone(),
+                                                    ),
+                                                );
+                                            }
+                                        }
+                                        _ => {
+                                            todo!("Handle unexpected variable type");
+                                        }
                                     }
-                                    _ => {
+                                } else {
+                                    resolved_type = Some(Cow::Borrowed(
+                                        context.get_type_of_variable(var_name)?,
+                                    ));
+                                }
+                            }
+                            Expression::Path(left_expr, right_expr) => {
+                                stack.push(right_expr);
+                                stack.push(left_expr);
+                            }
+                            _ => return Err(ParserError::NotImplemented),
+                        }
+                    }
+
+                    if let Some(final_type) = resolved_type {
+                        current_type = Some(final_type);
+                    } else {
+                        return Err(ParserError::NotImplemented);
+                    }
+                }
+
+                Expression::Operator(op, left, right) => match op {
+                    Operator::Or
+                    | Operator::Equals
+                    | Operator::NotEquals
+                    | Operator::GreaterOrEqual
+                    | Operator::GreaterThan
+                    | Operator::LessOrEqual
+                    | Operator::LessThan
+                    | Operator::And => {
+                        current_type = Some(Cow::Owned(Type::Bool));
+                    }
+
+                    Operator::Plus => {
+                        let mut processing_stack =
+                            vec![(left, current_on_type), (right, current_on_type)];
+                        let mut resolved_types = Vec::new();
+                        let mut current_expression = None;
+
+                        // Iteratively resolve types
+                        while let Some((expr, on_type)) = processing_stack.pop() {
+                            match &**expr {
+                                Expression::Value(val) => match Type::from_value(val) {
+                                    Some(v) => resolved_types.push(Cow::Owned(v)),
+                                    None => return Ok(None),
+                                },
+                                Expression::Cast(_, target_type) => {
+                                    resolved_types.push(Cow::Borrowed(target_type));
+                                }
+                                Expression::FunctionCall(_, func_name, _) => {
+                                    // Store the return type in a longer-lived variable
+                                    let function = self.get_function(*func_name)?;
+                                    let function_type = function.return_type();
+
+                                    match function_type {
+                                        Some(ref v) => match v {
+                                            Type::T => {
+                                                if let Some(t) = current_type.as_ref() {
+                                                    resolved_types.push(t.clone());
+                                                } else {
+                                                    return Err(ParserError::InvalidTypeT);
+                                                }
+                                            }
+                                            Type::Optional(inner) => {
+                                                resolved_types.push(Cow::Owned(Type::Optional(
+                                                    inner.clone(),
+                                                )));
+                                            }
+                                            _ => {
+                                                resolved_types.push(Cow::Owned(v.clone()));
+                                            }
+                                        },
+                                        None => return Err(ParserError::FunctionNoReturnType),
+                                    }
+                                }
+                                Expression::ArrayCall(path, _) => {
+                                    let mut stack: Vec<&Expression> = vec![path];
+                                    let mut current_type: Option<Cow<'b, Type>> = None;
+
+                                    while let Some(current_expr) = stack.pop() {
+                                        match current_expr {
+                                            Expression::Variable(var_name) => {
+                                                if let Some(_type) = current_type.as_ref() {
+                                                    match _type.as_ref() {
+                                                        Type::Array(inner_type) => {
+                                                            // Set the current type to the array's inner type
+                                                            current_type = Some(Cow::Owned(
+                                                                *inner_type.clone(),
+                                                            ));
+                                                        }
+                                                        _ => {
+                                                            // Return error if it's not an array
+                                                            return Err(
+                                                                ParserError::InvalidArrayCall,
+                                                            );
+                                                        }
+                                                    }
+                                                } else {
+                                                    // Resolve the variable's type
+                                                    current_type = Some(Cow::Borrowed(
+                                                        context.get_type_of_variable(var_name)?,
+                                                    ));
+                                                }
+                                            }
+                                            Expression::Path(left_expr, right_expr) => {
+                                                // Push left and right expressions onto the stack for processing
+                                                stack.push(right_expr);
+                                                stack.push(left_expr);
+                                            }
+                                            Expression::FunctionCall(_, func_name, _) => {
+                                                // Handle function calls within the ArrayCall
+                                                let function = self.get_function(*func_name)?;
+                                                let function_type = function.return_type();
+
+                                                match function_type {
+                                                    Some(ref v) => match v {
+                                                        Type::T => {
+                                                            if let Some(t) = current_type.as_ref() {
+                                                                current_type = Some(t.clone());
+                                                            } else {
+                                                                return Err(
+                                                                    ParserError::InvalidTypeT,
+                                                                );
+                                                            }
+                                                        }
+                                                        Type::Optional(inner) => {
+                                                            current_type = Some(Cow::Owned(
+                                                                Type::Optional(inner.clone()),
+                                                            ));
+                                                        }
+                                                        _ => {
+                                                            current_type =
+                                                                Some(Cow::Owned(v.clone()));
+                                                        }
+                                                    },
+                                                    None => {
+                                                        return Err(
+                                                            ParserError::FunctionNoReturnType,
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                            _ => {
+                                                return Err(ParserError::InvalidArrayCall);
+                                            }
+                                        }
+                                    }
+
+                                    // Validate and finalize the resolved type
+                                    if let Some(resolved) = current_type {
+                                        match resolved.into_owned() {
+                                            Type::Array(inner_type) => {
+                                                current_type = Some(Cow::Owned(*inner_type));
+                                            }
+                                            _ => return Err(ParserError::InvalidArrayCall),
+                                        }
+                                    } else {
                                         return Err(ParserError::InvalidArrayCall);
                                     }
+
+                                    return Ok(current_type);
                                 }
-                            } else {
-                                current_type = Some(Cow::Borrowed(context.get_type_of_variable(var_name)?));
-                            }
-                        }
-                        Expression::Path(left_expr, right_expr) => {
-                            stack.push(right_expr);
-                            stack.push(left_expr);
-                        }
-                        Expression::FunctionCall(ref func_path, func_name, func_args) => {
-                println!("Resolving FunctionCall in ArrayCall");
+                                Expression::Variable(var_name) => {
+                                    // Resolve variable type
+                                    let var_type = context.get_type_of_variable(var_name)?;
+                                    resolved_types.push(Cow::Borrowed(var_type));
+                                }
+                                Expression::Path(left, right) => {
+                                    let mut stack: Vec<&Expression> = vec![right, left];
+                                    let mut resolved_type: Option<Cow<'b, Type>> =
+                                        on_type.map(Cow::Borrowed);
 
-                            // Store the return type in a longer-lived variable
-                            let function = self.get_function(*func_name)?;
-                            let function_type = function.return_type();
-
-                            match function_type {
-                                Some(ref v) => match v {
-                                    Type::T => {
-                                        // Handle Type::T logic here
-                                    if let Some(t) = current_type.as_ref() {
-                        current_type = Some(t.clone()); // Directly use t.clone() without wrapping in Cow::Owned
-                    } else {
-                        return Err(ParserError::InvalidTypeT);
-                    }
-
-                        }
-                        Type::Optional(inner) => {
-                            // Handle Optional logic
-                            current_type = Some(Cow::Owned(Type::Optional(inner.clone())));
-                        }
-                        _ => {
-                            current_type = Some(Cow::Owned(v.clone()));
-                        }
-                    },
-                    None => return Err(ParserError::FunctionNoReturnType),
-                }
-            }
-
-            Expression::ArrayConstructor(_) => {
-                return Err(ParserError::InvalidArrayCall);
-            }
-            _ => {
-                println!("Unsupported expression encountered: {:?}", current_expr);
-                return Err(ParserError::InvalidArrayCall);
-            }
-        }
-    }
-
-    if let Some(resolved) = current_type {
-        match resolved.into_owned() {
-            Type::Array(inner_type) => {
-                current_type = Some(Cow::Owned(*inner_type));
-            }
-            _ => return Err(ParserError::InvalidArrayCall),
-        }
-    } else {
-        return Err(ParserError::InvalidArrayCall);
-    }
-
-    return Ok(current_type)
-}
-
-            Expression::SubExpression(expr) => {
-                println!("Resolved type:7 "); // Logging for debugging
-             
-                stack.push((expr, current_on_type));
-                   println!("currennttyypeee {:?}", stack); 
-            }
-            Expression::StructConstructor(_, struct_type) => {
-                println!("Resolved type: 1"); // Logging for debugging
-                println!("heloo {:?}", struct_type); 
-                current_type = Some(Cow::Owned(Type::Struct(struct_type.clone())));
-               
-               
-            }
-            Expression::Path(left, right) => {
-            let mut stack: Vec<&Expression> = Vec::new();
-            let mut current_type: Option<Cow<'b, Type>> = on_type.map(Cow::Borrowed);
-
-            // Push the initial expressions onto the stack
-            stack.push(right);
-            stack.push(left);
-
-            // Process the stack iteratively
-            while let Some(current_expr) = stack.pop() {
-                match current_expr {
-                    Expression::Variable(var_name) => {
-                        if let Some(_type) = current_type.as_ref() {
-                            match _type.as_ref() {
-                                Type::Struct(struct_type) => {
-                                    let field_index = *var_name as usize; // Assuming `var_name` is indexable
-                                    if let Some(field_type) = struct_type.fields().get(field_index) {
-                                        current_type = Some(Cow::Owned(field_type.clone()));
-                                    } else {
-                                        return Err(ParserError::UnexpectedMappedVariableId(var_name.clone()));
+                                    // Process each part of the path iteratively
+                                    while let Some(current_expr) = stack.pop() {
+                                        match current_expr {
+                                            Expression::Variable(var_name) => {
+                                                // Check the current resolved type context
+                                                if let Some(existing_type) = resolved_type.as_ref()
+                                                {
+                                                    match existing_type.as_ref() {
+                                                        Type::Struct(struct_type) => {
+                                                            // Resolve the field within the struct by its index or name
+                                                            let field_index = *var_name as usize; // Assuming this is an index
+                                                            if let Some(field_type) = struct_type
+                                                                .fields()
+                                                                .get(field_index)
+                                                            {
+                                                                resolved_type = Some(Cow::Owned(
+                                                                    field_type.clone(),
+                                                                ));
+                                                            } else {
+                                                                return Err(ParserError::UnexpectedMappedVariableId(var_name.clone()));
+                                                            }
+                                                        }
+                                                        _ => {
+                                                            // Invalid path access if the existing type isn't a struct
+                                                            return Err(ParserError::InvalidOperatorExpression);
+                                                        }
+                                                    }
+                                                } else {
+                                                    // If no resolved type yet, attempt to resolve the variable's type
+                                                    resolved_type = Some(Cow::Borrowed(
+                                                        context.get_type_of_variable(var_name)?,
+                                                    ));
+                                                }
+                                            }
+                                            Expression::Path(left_expr, right_expr) => {
+                                                // Push right and left expressions for iterative processing
+                                                stack.push(right_expr);
+                                                stack.push(left_expr);
+                                            }
+                                            _ => {
+                                                // Unsupported expressions within a path
+                                                return Err(ParserError::InvalidOperatorExpression);
+                                            }
+                                        }
                                     }
-                                },
+                                    resolved_types.push(resolved_type.unwrap());
+                                }
+
+                                Expression::Operator(op, left, right) => {
+                                    // Push sub-expressions back onto the stack
+                                    processing_stack.push((left, on_type));
+                                    processing_stack.push((right, on_type));
+                                    // Save the current operator expression for later
+                                    current_expression = Some(Expression::Operator(
+                                        op.clone(),
+                                        Box::new(*left.clone()),
+                                        Box::new(*right.clone()),
+                                    ));
+                                }
                                 _ => {
-                                    todo!("Handle unexpected variable type");
+                                    return Err(ParserError::InvalidOperatorExpression);
                                 }
                             }
-                        } else {
-                            current_type = Some(Cow::Borrowed(context.get_type_of_variable(var_name)?));
                         }
+
+                        // Determine the resulting type
+                        let left_type = resolved_types.pop().ok_or(ParserError::EmptyValue)?;
+                        let right_type = resolved_types.pop().ok_or(ParserError::EmptyValue)?;
+
+                        let result_type =
+                            if *left_type == Type::String || *right_type == Type::String {
+                                Cow::Owned(Type::String)
+                            } else if left_type == right_type {
+                                left_type
+                            } else {
+                                return Err(ParserError::InvalidValueType(
+                                    left_type.into_owned(),
+                                    right_type.into_owned(),
+                                ));
+                            };
+
+                        // Build the final resolved expression
+                        let resolved_expression = current_expression.unwrap_or_else(|| {
+                            Expression::Operator(
+                                Operator::Plus,
+                                Box::new(*left.clone()),
+                                Box::new(*right.clone()),
+                            )
+                        });
+
+                        // Set the current type for the operator
+                        current_type = Some(result_type.clone());
                     }
-                    Expression::Path(left_expr, right_expr) => {
-                        // Push right first, then left for correct order processing
-                        stack.push(right_expr);
-                        stack.push(left_expr);
+                    Operator::Minus => {
+                        stack.push((left, current_on_type));
+                        stack.push((right, current_on_type));
+                    }
+                    Operator::Multiply
+                    | Operator::Divide
+                    | Operator::BitwiseXor
+                    | Operator::BitwiseAnd
+                    | Operator::BitwiseOr
+                    | Operator::BitwiseLeft
+                    | Operator::BitwiseRight
+                    | Operator::Rem => {
+                        stack.push((left, current_on_type));
+                        stack.push((right, current_on_type));
                     }
                     _ => {
-                return Err(ParserError::NotImplemented);
-            }
-        }
-    }
-
-    // Ensure we return a resolved type at the end
-    return Ok(current_type)
-        },
-            Expression::Operator(op, left, right) =>{
-      
-            
-             match op {
-                Operator::Or
-                | Operator::Equals
-                | Operator::NotEquals
-                | Operator::GreaterOrEqual
-                | Operator::GreaterThan
-                | Operator::LessOrEqual
-                | Operator::LessThan
-                | Operator::And => {
-            
-                    
-                    current_type = Some(Cow::Owned(Type::Bool));
+                        return Err(ParserError::AssignReturnNothing);
+                    }
+                },
+                Expression::Value(val) => match Type::from_value(val) {
+                    Some(v) => current_type = Some(Cow::Owned(v)),
+                    None => return Ok(None),
+                },
+                Expression::Ternary(_, expr, _) => {
+                    stack.push((expr, current_on_type));
                 }
-                
-                Operator::Plus | Operator::Minus => {
-                    stack.push((left, current_on_type));
-                    stack.push((right, current_on_type));
-                     println!("currennttyypeee stackk {:?}", stack); 
-                    if let Some(left_type) = current_type.take() {
-                        if left_type == Cow::Owned(Type::String) {
-                            current_type = Some(Cow::Owned(Type::String));
-                            println!("current_type {:?}", current_type);
-                         
-                        }
+                Expression::Cast(_, target_type) => {
+                    current_type = Some(Cow::Borrowed(target_type));
+                }
+                Expression::Range(start, _) => {
+                    stack.push((start, current_on_type));
+                    if let Some(Type::Range(inner)) =
+                        current_type.take().map(|cow| cow.into_owned())
+                    {
+                        current_type = Some(Cow::Owned(*inner));
                     }
                 }
-                Operator::Multiply
-                | Operator::Divide
-                | Operator::BitwiseXor
-                | Operator::BitwiseAnd
-                | Operator::BitwiseOr
-                | Operator::BitwiseLeft
-                | Operator::BitwiseRight
-                | Operator::Rem => {
-                    stack.push((left, current_on_type));
-                    stack.push((right, current_on_type));
-                }
-                _ => {
-                    return Err(ParserError::AssignReturnNothing);
-                }}
-        },
-            Expression::Value(val) => match Type::from_value(val) {
-                Some(v) => {      
-                println!("Resolved type: 3 "); // Logging for debugging
-                current_type = Some(Cow::Owned(v))},
-                None => return Ok(None),
-        },
-            Expression::Ternary(_, expr, _) => {
-                println!("Resolved type: 4"); // Logging for debugging
-                stack.push((expr, current_on_type));
-        },
-            Expression::Cast(_, target_type) => {
-                println!("Resolved type: 5"); // Logging for debugging
-                current_type = Some(Cow::Borrowed(target_type));
-        },
-            Expression::Range(start, _) => {
-                println!("Resolved type: 6"); // Logging for debugging
-                stack.push((start, current_on_type));
-                if let Some(Type::Range(inner)) = current_type.take().map(|cow| cow.into_owned()) {
-                    current_type = Some(Cow::Owned(*inner));
+                Expression::IsNot(_) => {
+                    current_type = Some(Cow::Owned(Type::Bool));
                 }
             }
-            Expression::IsNot(_) => {
-                current_type = Some(Cow::Owned(Type::Bool));
         }
-        }
+
+        // Ok(current_type);
+
+        Ok(Some(current_type.clone().unwrap()))
     }
-      println!("heloower {:?}", current_type.clone().unwrap());
-    
-    // Ok(current_type);
-   
-    Ok(Some(current_type.clone().unwrap()))
-}
- 
+
     // Read a function call with the following syntax:
     // function_name(param1, param2, ...)
-    fn read_function_call(&mut self, path: Option<Expression>, on_type: Option<&Type>, name: &str, context: &mut Context<'a>) -> Result<Expression, ParserError<'a>> {
+    fn read_function_call(
+        &mut self,
+        path: Option<Expression>,
+        on_type: Option<&Type>,
+        name: &str,
+        context: &mut Context<'a>,
+    ) -> Result<Expression, ParserError<'a>> {
         // we remove the token from the list
         self.expect_token(Token::ParenthesisOpen)?;
         let mut parameters: Vec<Expression> = Vec::new();
@@ -619,7 +848,9 @@ fn get_type_from_expression_internal<'b>(
             let expr = self.read_expression(context)?;
             // We are forced to clone the type because we can't borrow it from the expression
             // I prefer to do this than doing an iteration below
-            let t = self.get_type_from_expression(None, &expr, context)?.into_owned();
+            let t = self
+                .get_type_from_expression(None, &expr, context)?
+                .into_owned();
             types.push(t);
             parameters.push(expr);
 
@@ -628,12 +859,15 @@ fn get_type_from_expression_internal<'b>(
             }
         }
 
-        let id = self.functions_mapper.get_compatible(Signature::new(name.to_owned(), on_type.cloned(), types), &mut parameters)?;
+        let id = self.functions_mapper.get_compatible(
+            Signature::new(name.to_owned(), on_type.cloned(), types),
+            &mut parameters,
+        )?;
 
         // Entry are only callable by external
         let f = self.get_function(id)?;
         if f.is_entry() {
-            return Err(ParserError::FunctionNotFound)
+            return Err(ParserError::FunctionNotFound);
         }
 
         self.expect_token(Token::ParenthesisClose)?;
@@ -644,15 +878,21 @@ fn get_type_from_expression_internal<'b>(
     // struct_name { field_name: value1, field2: value2 }
     // If we have a field that has the same name as a variable we can pass it as following:
     // Example: struct_name { field_name, field2: value2 }
-    fn read_struct_constructor(&mut self, on_type: Option<&Type>, struct_type: StructType, context: &mut Context<'a>) -> Result<Expression, ParserError<'a>> {
+    fn read_struct_constructor(
+        &mut self,
+        on_type: Option<&Type>,
+        struct_type: StructType,
+        context: &mut Context<'a>,
+    ) -> Result<Expression, ParserError<'a>> {
         self.expect_token(Token::BraceOpen)?;
-        
+
         let mut fields = Vec::with_capacity(struct_type.fields().len());
         for t in struct_type.fields() {
             let field_name = self.next_identifier()?;
             let field_value = match self.advance()? {
                 Token::Comma => {
-                    let id = context.get_variable_id(field_name)
+                    let id = context
+                        .get_variable_id(field_name)
                         .ok_or_else(|| ParserError::UnexpectedVariable(field_name.to_owned()))?;
                     Expression::Variable(id)
                 }
@@ -663,13 +903,15 @@ fn get_type_from_expression_internal<'b>(
                     }
                     value
                 }
-                token => return Err(ParserError::UnexpectedToken(token))
+                token => return Err(ParserError::UnexpectedToken(token)),
             };
 
             let field_type = self.get_type_from_expression(on_type, &field_value, context)?;
             if !t.is_compatible_with(&field_type) {
-
-                return Err(ParserError::InvalidValueType(field_type.into_owned(), t.clone()))
+                return Err(ParserError::InvalidValueType(
+                    field_type.into_owned(),
+                    t.clone(),
+                ));
             }
 
             fields.push(field_value);
@@ -687,74 +929,107 @@ fn get_type_from_expression_internal<'b>(
 
         let constant_name = self.next_identifier()?;
 
-        self.environment.get_constant_by_name(&_type, &constant_name)
+        self.environment
+            .get_constant_by_name(&_type, &constant_name)
             .map(|v| Expression::Value(v.clone()))
             .ok_or_else(|| ParserError::ConstantNotFound(_type, constant_name))
     }
 
     // Read an expression with default parameters
-    fn read_expression(&mut self, context: &mut Context<'a>) -> Result<Expression, ParserError<'a>> {
+    fn read_expression(
+        &mut self,
+        context: &mut Context<'a>,
+    ) -> Result<Expression, ParserError<'a>> {
         self.read_expr(None, true, true, None, context)
     }
 
     // Read an expression with the possibility to accept operators
     // number_type is used to force the type of a number
-    fn read_expr(&mut self, on_type: Option<&Type>, allow_ternary: bool, accept_operator: bool, expected_type: Option<&Type>, context: &mut Context<'a>) -> Result<Expression, ParserError<'a>> {
+    fn read_expr(
+        &mut self,
+        on_type: Option<&Type>,
+        allow_ternary: bool,
+        accept_operator: bool,
+        expected_type: Option<&Type>,
+        context: &mut Context<'a>,
+    ) -> Result<Expression, ParserError<'a>> {
         let mut required_operator = false;
         let mut last_expression: Option<Expression> = None;
-        while self.peek()
+        while self
+            .peek()
             .ok()
             .filter(|peek| {
                 if !allow_ternary && **peek == Token::OperatorTernary {
-                    return false
+                    return false;
                 }
 
                 if !accept_operator && required_operator {
-                    return false
+                    return false;
                 }
 
                 !peek.should_stop()
-                && (
-                    required_operator == peek.is_operator()
-                    || (**peek == Token::BracketOpen && last_expression.is_none())
-                )
-            }).is_some()
+                    && (required_operator == peek.is_operator()
+                        || (**peek == Token::BracketOpen && last_expression.is_none()))
+            })
+            .is_some()
         {
-
             let token = self.advance()?;
             let expr: Expression = match token {
                 Token::BracketOpen => {
                     match last_expression {
                         Some(v) => {
-                            if !self.get_type_from_expression(on_type, &v, context)?.is_array() {
-                                return Err(ParserError::InvalidArrayCall)
+                            if !self
+                                .get_type_from_expression(on_type, &v, context)?
+                                .is_array()
+                            {
+                                return Err(ParserError::InvalidArrayCall);
                             }
 
                             // Index must be of type u64
-                            let index = self.read_expr(on_type, true, true, Some(&Type::U32), context)?;
-                            let index_type = self.get_type_from_expression(on_type, &index, context)?;
+                            let index =
+                                self.read_expr(on_type, true, true, Some(&Type::U32), context)?;
+                            let index_type =
+                                self.get_type_from_expression(on_type, &index, context)?;
                             if *index_type != Type::U32 {
-                                return Err(ParserError::InvalidArrayCallIndexType(index_type.into_owned()))
+                                return Err(ParserError::InvalidArrayCallIndexType(
+                                    index_type.into_owned(),
+                                ));
                             }
 
                             self.expect_token(Token::BracketClose)?;
                             required_operator = !required_operator;
                             Expression::ArrayCall(Box::new(v), Box::new(index))
-                        },
-                        None => { // require at least one value in a array constructor
+                        }
+                        None => {
+                            // require at least one value in a array constructor
                             let mut expressions: Vec<Expression> = Vec::new();
                             let mut array_type: Option<Type> = None;
                             while self.peek_is_not(Token::BracketClose) {
-                                let expr = self.read_expr(on_type, true, true, expected_type.map(|t| t.get_inner_type()), context)?;
-                                match &array_type { // array values must have the same type
+                                let expr = self.read_expr(
+                                    on_type,
+                                    true,
+                                    true,
+                                    expected_type.map(|t| t.get_inner_type()),
+                                    context,
+                                )?;
+                                match &array_type {
+                                    // array values must have the same type
                                     Some(t) => {
-                                        let _type = self.get_type_from_expression(on_type, &expr, context)?;
+                                        let _type =
+                                            self.get_type_from_expression(on_type, &expr, context)?;
                                         if *_type != *t {
-                                            return Err(ParserError::InvalidTypeInArray(_type.into_owned(), t.clone()))
+                                            return Err(ParserError::InvalidTypeInArray(
+                                                _type.into_owned(),
+                                                t.clone(),
+                                            ));
                                         }
-                                    },
-                                    None => { // first value rules the type of array
-                                        array_type = Some(self.get_type_from_expression(on_type, &expr, context)?.into_owned());
+                                    }
+                                    None => {
+                                        // first value rules the type of array
+                                        array_type = Some(
+                                            self.get_type_from_expression(on_type, &expr, context)?
+                                                .into_owned(),
+                                        );
                                     }
                                 };
                                 expressions.push(expr);
@@ -768,16 +1043,18 @@ fn get_type_from_expression_internal<'b>(
                             Expression::ArrayConstructor(expressions)
                         }
                     }
-                },
+                }
                 Token::ParenthesisOpen => {
                     let expr = self.read_expr(None, true, true, expected_type, context)?;
                     self.expect_token(Token::ParenthesisClose)?;
                     Expression::SubExpression(Box::new(expr))
-                },
+                }
                 Token::Identifier(id) => {
                     match self.peek()? {
                         // function call
-                        Token::ParenthesisOpen => self.read_function_call(last_expression.take(), on_type, id, context)?,
+                        Token::ParenthesisOpen => {
+                            self.read_function_call(last_expression.take(), on_type, id, context)?
+                        }
                         Token::Colon => self.read_type_constant(Token::Identifier(id))?,
                         _ => {
                             match on_type {
@@ -787,51 +1064,59 @@ fn get_type_from_expression_internal<'b>(
                                         let builder = self.struct_manager.get_by_ref(_type)?;
                                         match builder.get_id_for_field(id) {
                                             Some(v) => Expression::Variable(v),
-                                            None => return Err(ParserError::UnexpectedVariable(id.to_owned()))
+                                            None => {
+                                                return Err(ParserError::UnexpectedVariable(
+                                                    id.to_owned(),
+                                                ))
+                                            }
                                         }
                                     } else {
-                                        return Err(ParserError::UnexpectedType(t.clone()))
+                                        return Err(ParserError::UnexpectedType(t.clone()));
                                     }
-                                },
+                                }
                                 None => {
                                     if let Some(id) = context.get_variable_id(id) {
                                         Expression::Variable(id)
                                     } else if let Ok(id) = self.struct_manager.get_by_name(&id) {
-                                        self.read_struct_constructor(on_type, id.inner().clone(), context)?
+                                        self.read_struct_constructor(
+                                            on_type,
+                                            id.inner().clone(),
+                                            context,
+                                        )?
                                     } else {
-                                        return Err(ParserError::UnexpectedVariable(id.to_owned()))
+                                        return Err(ParserError::UnexpectedVariable(id.to_owned()));
                                     }
                                 }
                             }
                         }
                     }
-                },
-                Token::Value(value) => {
-                    Expression::Value(match value {
-                        Literal::U8(n) => Value::U8(n),
-                        Literal::U16(n) => Value::U16(n),
-                        Literal::U32(n) => Value::U32(n),
-                        Literal::U64(n) => Value::U64(n),
-                        Literal::U128(n) => Value::U128(n),
-                        Literal::U256(n) => Value::U256(n),
-                        Literal::Number(n) => match expected_type {
-                            Some(Type::U8) => Value::U8(n as u8),
-                            Some(Type::U16) => Value::U16(n as u16),
-                            Some(Type::U32) => Value::U32(n as u32),
-                            Some(Type::U64) => Value::U64(n as u64),
-                            Some(Type::U128) => Value::U128(n as u128),
-                            Some(Type::U256) => Value::U256(U256::from(n)),
-                            _ => Value::U64(n)
-                        },
-                        Literal::String(s) => Value::String(s.into_owned()),
-                        Literal::Bool(b) => Value::Boolean(b),
-                        Literal::Null => Value::Null
-                    })
-                },
+                }
+                Token::Value(value) => Expression::Value(match value {
+                    Literal::U8(n) => Value::U8(n),
+                    Literal::U16(n) => Value::U16(n),
+                    Literal::U32(n) => Value::U32(n),
+                    Literal::U64(n) => Value::U64(n),
+                    Literal::U128(n) => Value::U128(n),
+                    Literal::U256(n) => Value::U256(n),
+                    Literal::Number(n) => match expected_type {
+                        Some(Type::U8) => Value::U8(n as u8),
+                        Some(Type::U16) => Value::U16(n as u16),
+                        Some(Type::U32) => Value::U32(n as u32),
+                        Some(Type::U64) => Value::U64(n as u64),
+                        Some(Type::U128) => Value::U128(n as u128),
+                        Some(Type::U256) => Value::U256(U256::from(n)),
+                        _ => Value::U64(n),
+                    },
+                    Literal::String(s) => Value::String(s.into_owned()),
+                    Literal::Bool(b) => Value::Boolean(b),
+                    Literal::Null => Value::Null,
+                }),
                 Token::Dot => {
                     match last_expression {
                         Some(value) => {
-                            let _type = self.get_type_from_expression(on_type, &value, context)?.into_owned();
+                            let _type = self
+                                .get_type_from_expression(on_type, &value, context)?
+                                .into_owned();
                             // If we have .. that is mostly a range
 
                             // because we read operator DOT + right expression
@@ -839,134 +1124,221 @@ fn get_type_from_expression_internal<'b>(
 
                             if self.peek_is(Token::Dot) {
                                 self.expect_token(Token::Dot)?;
-                                let end_expr = self.read_expr(Some(&_type), false, false, expected_type, context)?;
-                                let end_type = self.get_type_from_expression(on_type, &end_expr, context)?;
+                                let end_expr = self.read_expr(
+                                    Some(&_type),
+                                    false,
+                                    false,
+                                    expected_type,
+                                    context,
+                                )?;
+                                let end_type =
+                                    self.get_type_from_expression(on_type, &end_expr, context)?;
                                 if _type != *end_type {
-                                    return Err(ParserError::InvalidRangeType(_type, end_type.into_owned()))
+                                    return Err(ParserError::InvalidRangeType(
+                                        _type,
+                                        end_type.into_owned(),
+                                    ));
                                 }
 
                                 if !_type.is_primitive() {
-                                    return Err(ParserError::InvalidRangeTypePrimitive(_type))
+                                    return Err(ParserError::InvalidRangeTypePrimitive(_type));
                                 }
 
                                 Expression::Range(Box::new(value), Box::new(end_expr))
                             } else {
-                                let right_expr = self.read_expr(Some(&_type), false, false, expected_type, context)?;
+                                let right_expr = self.read_expr(
+                                    Some(&_type),
+                                    false,
+                                    false,
+                                    expected_type,
+                                    context,
+                                )?;
 
                                 if let Expression::FunctionCall(path, name, params) = right_expr {
                                     if path.is_some() {
-                                        return Err(ParserError::UnexpectedPathInFunctionCall)
+                                        return Err(ParserError::UnexpectedPathInFunctionCall);
                                     }
                                     Expression::FunctionCall(Some(Box::new(value)), name, params)
                                 } else {
                                     Expression::Path(Box::new(value), Box::new(right_expr))
                                 }
                             }
-                        },
-                        None => return Err(ParserError::UnexpectedToken(Token::Dot))
+                        }
+                        None => return Err(ParserError::UnexpectedToken(Token::Dot)),
                     }
-                },
-                Token::IsNot => { // it's an operator, but not declared as
+                }
+                Token::IsNot => {
+                    // it's an operator, but not declared as
                     let expr = self.read_expression(context)?;
                     let expr_type = self.get_type_from_expression(on_type, &expr, context)?;
                     if *expr_type != Type::Bool {
-                        
-                        return Err(ParserError::InvalidValueType(expr_type.into_owned(), Type::Bool))
+                        return Err(ParserError::InvalidValueType(
+                            expr_type.into_owned(),
+                            Type::Bool,
+                        ));
                     }
 
                     Expression::IsNot(Box::new(expr))
-                },
-                Token::OperatorTernary => match last_expression { // condition ? expr : expr
+                }
+                Token::OperatorTernary => match last_expression {
+                    // condition ? expr : expr
                     Some(expr) => {
                         if *self.get_type_from_expression(on_type, &expr, context)? != Type::Bool {
-                            return Err(ParserError::InvalidCondition(Type::Bool, expr))
+                            return Err(ParserError::InvalidCondition(Type::Bool, expr));
                         }
 
-                        let valid_expr = self.read_expr(on_type, true, true, expected_type, context)?;
-                        let first_type = self.get_type_from_expression(on_type, &valid_expr, context)?.into_owned();
+                        let valid_expr =
+                            self.read_expr(on_type, true, true, expected_type, context)?;
+                        let first_type = self
+                            .get_type_from_expression(on_type, &valid_expr, context)?
+                            .into_owned();
                         self.expect_token(Token::Colon)?;
-                        let else_expr = self.read_expr(on_type, true, true, expected_type, context)?;
-                        let else_type = self.get_type_from_expression(on_type, &else_expr, context)?;
-                        
-                        if first_type != *else_type { // both expr should have the SAME type.
-                            return Err(ParserError::InvalidValueType(else_type.into_owned(), first_type))
+                        let else_expr =
+                            self.read_expr(on_type, true, true, expected_type, context)?;
+                        let else_type =
+                            self.get_type_from_expression(on_type, &else_expr, context)?;
+
+                        if first_type != *else_type {
+                            // both expr should have the SAME type.
+                            return Err(ParserError::InvalidValueType(
+                                else_type.into_owned(),
+                                first_type,
+                            ));
                         }
                         required_operator = !required_operator;
-                        Expression::Ternary(Box::new(expr), Box::new(valid_expr), Box::new(else_expr))
-                    },
-                    None => return Err(ParserError::InvalidTernaryNoPreviousExpression)
+                        Expression::Ternary(
+                            Box::new(expr),
+                            Box::new(valid_expr),
+                            Box::new(else_expr),
+                        )
+                    }
+                    None => return Err(ParserError::InvalidTernaryNoPreviousExpression),
                 },
                 Token::As => {
-                    let previous_expr = last_expression.ok_or_else(|| ParserError::InvalidOperation)?;
-                    let left_type = self.get_type_from_expression(on_type, &previous_expr, context)?.into_owned();
+                    let previous_expr =
+                        last_expression.ok_or_else(|| ParserError::InvalidOperation)?;
+                    let left_type = self
+                        .get_type_from_expression(on_type, &previous_expr, context)?
+                        .into_owned();
                     let right_type = self.read_type()?;
 
                     if !left_type.is_castable_to(&right_type) {
-                        return Err(ParserError::CastError(left_type, right_type))
+                        return Err(ParserError::CastError(left_type, right_type));
                     }
 
                     if !right_type.is_primitive() {
-                        return Err(ParserError::CastPrimitiveError(left_type, right_type))
+                        return Err(ParserError::CastPrimitiveError(left_type, right_type));
                     }
 
                     required_operator = !required_operator;
                     Expression::Cast(Box::new(previous_expr), right_type)
-                },
+                }
                 token => {
                     match last_expression {
                         Some(mut previous_expr) => {
                             required_operator = !required_operator;
 
-                            let left_type = self.get_type_from_expression(on_type, &previous_expr, context)?.into_owned();
+                            let left_type = self
+                                .get_type_from_expression(on_type, &previous_expr, context)?
+                                .into_owned();
                             // Parse the operator for this token
                             let op = match Operator::value_of(&token) {
                                 Some(op) => op,
-                                None => return Err(ParserError::OperatorNotFound(token))
+                                None => return Err(ParserError::OperatorNotFound(token)),
                             };
 
-                            let mut expr = self.read_expr(on_type, false, true, Some(&left_type), context)?;
-                            if let Some(right_type) = self.get_type_from_expression_internal(on_type, &expr, context)? {
+                            let mut expr =
+                                self.read_expr(on_type, false, true, Some(&left_type), context)?;
+                            if let Some(right_type) =
+                                self.get_type_from_expression_internal(on_type, &expr, context)?
+                            {
                                 match &op {
-                                    Operator::Minus | Operator::Rem | Operator::Divide | Operator::Multiply
-                                    | Operator::Assign(_) | Operator::BitwiseLeft | Operator::BitwiseRight
-                                    | Operator::GreaterThan | Operator::LessThan | Operator::LessOrEqual
+                                    Operator::Minus
+                                    | Operator::Rem
+                                    | Operator::Divide
+                                    | Operator::Multiply
+                                    | Operator::Assign(_)
+                                    | Operator::BitwiseLeft
+                                    | Operator::BitwiseRight
+                                    | Operator::GreaterThan
+                                    | Operator::LessThan
+                                    | Operator::LessOrEqual
                                     | Operator::GreaterOrEqual => {
                                         if left_type != *right_type {
                                             // It is an hardcoded value, lets map it to the correct type
                                             if let Expression::Value(value) = previous_expr {
-                                                previous_expr = Expression::Value(value.checked_cast_to_primitive_type(&right_type)?);
+                                                previous_expr = Expression::Value(
+                                                    value.checked_cast_to_primitive_type(
+                                                        &right_type,
+                                                    )?,
+                                                );
                                             } else if let Expression::Value(value) = expr {
-                                                expr = Expression::Value(value.checked_cast_to_primitive_type(&left_type)?);
+                                                expr = Expression::Value(
+                                                    value.checked_cast_to_primitive_type(
+                                                        &left_type,
+                                                    )?,
+                                                );
                                             } else {
-                                                return Err(ParserError::InvalidOperationNotSameType(left_type, right_type.into_owned()))
+                                                return Err(
+                                                    ParserError::InvalidOperationNotSameType(
+                                                        left_type,
+                                                        right_type.into_owned(),
+                                                    ),
+                                                );
                                             }
                                         }
-                                    },
+                                    }
                                     Operator::Plus => {
-                                        if left_type != *right_type && !(left_type == Type::String || *right_type == Type::String) {
-                                            return Err(ParserError::InvalidOperationNotSameType(left_type, right_type.into_owned()))
+                                        if left_type != *right_type
+                                            && !(left_type == Type::String
+                                                || *right_type == Type::String)
+                                        {
+                                            return Err(ParserError::InvalidOperationNotSameType(
+                                                left_type,
+                                                right_type.into_owned(),
+                                            ));
                                         }
-                                    },
+                                    }
                                     Operator::And | Operator::Or => {
                                         if left_type != Type::Bool {
-                                            return Err(ParserError::InvalidOperationNotSameType(left_type, Type::Bool))
+                                            return Err(ParserError::InvalidOperationNotSameType(
+                                                left_type,
+                                                Type::Bool,
+                                            ));
                                         }
 
                                         if *right_type != Type::Bool {
-                                            return Err(ParserError::InvalidOperationNotSameType(right_type.into_owned(), Type::Bool))
+                                            return Err(ParserError::InvalidOperationNotSameType(
+                                                right_type.into_owned(),
+                                                Type::Bool,
+                                            ));
                                         }
-                                    },
-                                    _ => if left_type != *right_type {
-                                        return Err(ParserError::InvalidOperationNotSameType(left_type, right_type.into_owned()))
+                                    }
+                                    _ => {
+                                        if left_type != *right_type {
+                                            return Err(ParserError::InvalidOperationNotSameType(
+                                                left_type,
+                                                right_type.into_owned(),
+                                            ));
+                                        }
                                     }
                                 };
 
                                 Expression::Operator(op, Box::new(previous_expr), Box::new(expr))
                             } else {
                                 match op {
-                                    Operator::Equals | Operator::NotEquals |
-                                    Operator::Assign(None) if left_type.allow_null() => Expression::Operator(op, Box::new(previous_expr), Box::new(expr)),
-                                    _ => return Err(ParserError::IncompatibleNullWith(left_type))
+                                    Operator::Equals
+                                    | Operator::NotEquals
+                                    | Operator::Assign(None)
+                                        if left_type.allow_null() =>
+                                    {
+                                        Expression::Operator(
+                                            op,
+                                            Box::new(previous_expr),
+                                            Box::new(expr),
+                                        )
+                                    }
+                                    _ => return Err(ParserError::IncompatibleNullWith(left_type)),
                                 }
                             }
                         }
@@ -974,7 +1346,7 @@ fn get_type_from_expression_internal<'b>(
                             if token.is_type() {
                                 self.read_type_constant(token)?
                             } else {
-                                return Err(ParserError::InvalidOperation)
+                                return Err(ParserError::InvalidOperation);
                             }
                         }
                     }
@@ -987,7 +1359,7 @@ fn get_type_from_expression_internal<'b>(
 
         match last_expression {
             Some(v) => Ok(v),
-            None => Err(ParserError::NotImplemented)
+            None => Err(ParserError::NotImplemented),
         }
     }
 
@@ -996,7 +1368,11 @@ fn get_type_from_expression_internal<'b>(
      *     ...
      * }
      */
-    fn read_body(&mut self, context: &mut Context<'a>, return_type: &Option<Type>) -> Result<Vec<Statement>, ParserError<'a>> {
+    fn read_body(
+        &mut self,
+        context: &mut Context<'a>,
+        return_type: &Option<Type>,
+    ) -> Result<Vec<Statement>, ParserError<'a>> {
         context.begin_scope();
         let statements = self.read_statements(context, return_type)?;
         context.end_scope();
@@ -1011,45 +1387,59 @@ fn get_type_from_expression_internal<'b>(
      * - Must provide a value type
      * - If no value is set, Null is set by default
      */
-    fn read_variable(&mut self, context: &mut Context<'a>, is_const: bool) -> Result<DeclarationStatement, ParserError<'a>> {
+    fn read_variable(
+        &mut self,
+        context: &mut Context<'a>,
+        is_const: bool,
+    ) -> Result<DeclarationStatement, ParserError<'a>> {
         let name: &'a str = self.next_identifier()?;
 
         // Constants must be uppercase
         if is_const && name.to_uppercase() != name {
-            return Err(ParserError::ConstantNameNotUppercase(name.to_owned()))
+            return Err(ParserError::ConstantNameNotUppercase(name.to_owned()));
         }
 
         let ignored = name == "_";
 
         // Variable name must start with a alphabetic character
         if !ignored && !name.starts_with(char::is_alphabetic) {
-            return Err(ParserError::VariableMustStartWithAlphabetic(name.to_owned()))
+            return Err(ParserError::VariableMustStartWithAlphabetic(
+                name.to_owned(),
+            ));
         }
 
         self.expect_token(Token::Colon)?;
         let value_type = self.read_type()?;
         let value: Expression = if self.peek_is(Token::OperatorAssign) {
             self.expect_token(Token::OperatorAssign)?;
-            let expr = self.read_expr(None, true, true, Some(value_type.get_inner_type()), context)?;
+            let expr =
+                self.read_expr(None, true, true, Some(value_type.get_inner_type()), context)?;
 
             let expr_type = match self.get_type_from_expression_internal(None, &expr, context) {
                 Ok(opt_type) => match opt_type {
                     Some(v) => v,
-                    None => if value_type.is_optional() {
-                        Cow::Owned(value_type.clone())
-                    } else {
-                        return Err(ParserError::NoValueType)
+                    None => {
+                        if value_type.is_optional() {
+                            Cow::Owned(value_type.clone())
+                        } else {
+                            return Err(ParserError::NoValueType);
+                        }
                     }
                 },
-                Err(e) => match e { // support empty array declaration
-                    ParserError::EmptyArrayConstructor if value_type.is_array() => Cow::Owned(value_type.clone()),
-                    _ => return Err(e)
-                }
+                Err(e) => match e {
+                    // support empty array declaration
+                    ParserError::EmptyArrayConstructor if value_type.is_array() => {
+                        Cow::Owned(value_type.clone())
+                    }
+                    _ => return Err(e),
+                },
             };
 
             if !expr_type.is_compatible_with(&value_type) {
-              
-                return Err(ParserError::InvalidValueType(expr_type.into_owned(), value_type))
+                return Err(ParserError::InvalidValueType(
+                    expr_type.into_owned(),
+                    value_type,
+                ));
             }
 
             expr
@@ -1066,11 +1456,15 @@ fn get_type_from_expression_internal<'b>(
         Ok(DeclarationStatement {
             id,
             value_type,
-            value
+            value,
         })
     }
 
-    fn read_loop_body(&mut self, context: &mut Context<'a>, return_type: &Option<Type>) -> Result<Vec<Statement>, ParserError<'a>> {
+    fn read_loop_body(
+        &mut self,
+        context: &mut Context<'a>,
+        return_type: &Option<Type>,
+    ) -> Result<Vec<Statement>, ParserError<'a>> {
         // support nested loop
         let old_value = context.is_in_a_loop();
         context.set_in_a_loop(true);
@@ -1082,23 +1476,33 @@ fn get_type_from_expression_internal<'b>(
     }
 
     // Read a single statement
-    fn read_statement(&mut self, context: &mut Context<'a>, return_type: &Option<Type>) -> Result<Option<Statement>, ParserError<'a>> {
+    fn read_statement(
+        &mut self,
+        context: &mut Context<'a>,
+        return_type: &Option<Type>,
+    ) -> Result<Option<Statement>, ParserError<'a>> {
         if let Some(token) = self.next() {
             let statement: Statement = match token {
                 Token::BraceClose => return Ok(None),
-                Token::For => { // Example: for i: u64 = 0; i < 10; i += 1 {}
+                Token::For => {
+                    // Example: for i: u64 = 0; i < 10; i += 1 {}
                     context.begin_scope();
                     let var = self.read_variable(context, false)?;
                     let condition = self.read_expression(context)?;
-                    let condition_type = self.get_type_from_expression(None, &condition, context)?;
-                    if  *condition_type != Type::Bool {
-                        return Err(ParserError::InvalidCondition(condition_type.into_owned(), condition))
+                    let condition_type =
+                        self.get_type_from_expression(None, &condition, context)?;
+                    if *condition_type != Type::Bool {
+                        return Err(ParserError::InvalidCondition(
+                            condition_type.into_owned(),
+                            condition,
+                        ));
                     }
 
                     let increment = self.read_expression(context)?;
-                    match &increment { // allow only assignations on this expr
-                        Expression::Operator(op, _, _) if op.is_assignation() => {},
-                        _ => return Err(ParserError::InvalidForExpression(increment))
+                    match &increment {
+                        // allow only assignations on this expr
+                        Expression::Operator(op, _, _) if op.is_assignation() => {}
+                        _ => return Err(ParserError::InvalidForExpression(increment)),
                     };
 
                     let statements = self.read_loop_body(context, return_type)?;
@@ -1106,7 +1510,8 @@ fn get_type_from_expression_internal<'b>(
 
                     Statement::For(var, condition, increment, statements)
                 }
-                Token::ForEach => { // Example: foreach a in array {}
+                Token::ForEach => {
+                    // Example: foreach a in array {}
                     context.begin_scope();
                     let variable = self.next_identifier()?;
                     self.expect_token(Token::In)?;
@@ -1115,31 +1520,41 @@ fn get_type_from_expression_internal<'b>(
 
                     // verify that we can iter on it
                     if !expr_type.is_iterable() {
-                        return Err(ParserError::NotIterable(expr_type.into_owned()))
+                        return Err(ParserError::NotIterable(expr_type.into_owned()));
                     }
 
-                    let id = context.register_variable(variable, expr_type.get_inner_type().clone())?;
+                    let id =
+                        context.register_variable(variable, expr_type.get_inner_type().clone())?;
                     let statements = self.read_loop_body(context, return_type)?;
                     context.end_scope();
 
                     Statement::ForEach(id, expr, statements)
-                },
-                Token::While => { // Example: while i < 10 {}
+                }
+                Token::While => {
+                    // Example: while i < 10 {}
                     let condition = self.read_expression(context)?;
-                    let condition_type = self.get_type_from_expression(None, &condition, context)?;
-                    if  *condition_type != Type::Bool {
-                        return Err(ParserError::InvalidCondition(condition_type.into_owned(), condition))
+                    let condition_type =
+                        self.get_type_from_expression(None, &condition, context)?;
+                    if *condition_type != Type::Bool {
+                        return Err(ParserError::InvalidCondition(
+                            condition_type.into_owned(),
+                            condition,
+                        ));
                     }
 
                     let statements = self.read_loop_body(context, return_type)?;
 
                     Statement::While(condition, statements)
-                },
+                }
                 Token::If => {
                     let condition = self.read_expression(context)?;
-                    let condition_type = self.get_type_from_expression(None, &condition, context)?;
+                    let condition_type =
+                        self.get_type_from_expression(None, &condition, context)?;
                     if *condition_type != Type::Bool {
-                        return Err(ParserError::InvalidCondition(condition_type.into_owned(), condition))
+                        return Err(ParserError::InvalidCondition(
+                            condition_type.into_owned(),
+                            condition,
+                        ));
                     }
 
                     self.expect_token(Token::BraceOpen)?;
@@ -1158,7 +1573,7 @@ fn get_type_from_expression_internal<'b>(
                     };
 
                     Statement::If(condition, body, else_statement)
-                },
+                }
                 Token::BraceOpen => Statement::Scope(self.read_body(context, return_type)?),
                 Token::Let => Statement::Variable(self.read_variable(context, false)?),
                 Token::Return => {
@@ -1172,10 +1587,6 @@ fn get_type_from_expression_internal<'b>(
 
                         // Check if the expression's type matches the expected return type
                         if !expr_type.is_compatible_with(return_type) {
-                            println!("Resolved Expression: {:?}", expr);
-                            println!("Resolved Expression Type: {:?}", expr_type);
-                            println!("Expected Return Type: {:?}", return_type);
-
                             // Return a descriptive error when types are incompatible
                             return Err(ParserError::InvalidValueType(
                                 expr_type.into_owned(),
@@ -1209,7 +1620,7 @@ fn get_type_from_expression_internal<'b>(
                     }
 
                     Statement::Continue
-                },
+                }
                 Token::Break => {
                     if !context.is_in_a_loop() {
                         return Err(ParserError::UnexpectedToken(Token::Break));
@@ -1221,7 +1632,7 @@ fn get_type_from_expression_internal<'b>(
                     }
 
                     Statement::Break
-                },
+                }
                 token => {
                     self.tokens.push_front(token);
                     Statement::Expression(self.read_expression(context)?)
@@ -1231,12 +1642,15 @@ fn get_type_from_expression_internal<'b>(
         } else {
             Ok(None)
         }
-
     }
     // Read all statements in a block
     // return type is used to verify that the last statement is a return with a valid value type
     // consume_brace is used to know if we should consume the open brace
-    fn read_statements(&mut self, context: &mut Context<'a>, return_type: &Option<Type>) -> Result<Vec<Statement>, ParserError<'a>> {
+    fn read_statements(
+        &mut self,
+        context: &mut Context<'a>,
+        return_type: &Option<Type>,
+    ) -> Result<Vec<Statement>, ParserError<'a>> {
         let mut statements: Vec<Statement> = Vec::new();
         while let Some(statement) = self.read_statement(context, return_type)? {
             statements.push(statement);
@@ -1284,7 +1698,7 @@ fn get_type_from_expression_internal<'b>(
                 }
                 Statement::Return(Some(_)) => {
                     ok = true;
-                },
+                }
                 _ => {}
             }
         }
@@ -1303,7 +1717,11 @@ fn get_type_from_expression_internal<'b>(
      * - Signature is based on function name, and parameters
      * - Entry function is a "public callable" function and must return a u64 value
      */
-    fn read_function(&mut self, entry: bool, context: &mut Context<'a>) -> Result<(), ParserError<'a>> {
+    fn read_function(
+        &mut self,
+        entry: bool,
+        context: &mut Context<'a>,
+    ) -> Result<(), ParserError<'a>> {
         context.begin_scope();
 
         let token = self.advance()?;
@@ -1316,7 +1734,7 @@ fn get_type_from_expression_internal<'b>(
             (Some(id), Some(for_type), self.next_identifier()?)
         } else {
             let Token::Identifier(name) = token else {
-                return Err(ParserError::ExpectedIdentifierToken(token))
+                return Err(ParserError::ExpectedIdentifierToken(token));
             };
             (None, None, name)
         };
@@ -1329,11 +1747,12 @@ fn get_type_from_expression_internal<'b>(
         let return_type: Option<Type> = if entry {
             // an entrypoint cannot be a method
             if for_type.is_some() {
-                return Err(ParserError::EntryFunctionCannotHaveForType)
+                return Err(ParserError::EntryFunctionCannotHaveForType);
             }
 
             Some(Type::U64)
-        } else if self.peek_is(Token::ReturnType) { // read returned type
+        } else if self.peek_is(Token::ReturnType) {
+            // read returned type
             self.advance()?;
             Some(self.read_type()?)
         } else {
@@ -1341,9 +1760,13 @@ fn get_type_from_expression_internal<'b>(
         };
 
         let types: Vec<Type> = parameters.iter().map(|p| p.1.clone()).collect();
-        let id = self.functions_mapper.register(Signature::new(name.to_owned(), for_type.clone(), types))?;
+        let id = self.functions_mapper.register(Signature::new(
+            name.to_owned(),
+            for_type.clone(),
+            types,
+        ))?;
         if self.has_function(id) {
-            return Err(ParserError::FunctionSignatureAlreadyExist) 
+            return Err(ParserError::FunctionSignatureAlreadyExist);
         }
 
         let has_return_type = return_type.is_some();
@@ -1361,19 +1784,23 @@ fn get_type_from_expression_internal<'b>(
 
         // verify that the function ends with a return
         if has_return_type && !Self::ends_with_return(&statements)? {
-            return Err(ParserError::NoReturnFound)
+            return Err(ParserError::NoReturnFound);
         }
 
         let function = match entry {
-            true => FunctionType::Entry(EntryFunction::new(new_params, statements, context.max_variables_count() as u16)),
+            true => FunctionType::Entry(EntryFunction::new(
+                new_params,
+                statements,
+                context.max_variables_count() as u16,
+            )),
             false => FunctionType::Declared(DeclaredFunction::new(
                 for_type,
                 instance_name,
                 new_params,
                 statements,
                 return_type,
-                context.max_variables_count() as u16
-            ))
+                context.max_variables_count() as u16,
+            )),
         };
 
         // push function before reading statements to allow recursive calls
@@ -1390,18 +1817,18 @@ fn get_type_from_expression_internal<'b>(
         let path = self.advance()?;
 
         let Token::Value(Literal::String(path)) = path else {
-            return Err(ParserError::InvalidImport)
+            return Err(ParserError::InvalidImport);
         };
 
         // We don't allow absolute path or path that contains ".."
         if path.starts_with("/") || path.contains("..") {
-            return Err(ParserError::InvalidImportPath(path.into_owned()))
+            return Err(ParserError::InvalidImportPath(path.into_owned()));
         }
 
         // If its a local import, we will import its content directly
         let is_local = path.ends_with(".xel");
         if !is_local {
-            return Err(ParserError::NotImplemented)
+            return Err(ParserError::NotImplemented);
         }
 
         Ok(())
@@ -1422,7 +1849,7 @@ fn get_type_from_expression_internal<'b>(
         } else {
             match self.functions.get(index - len) {
                 Some(func) => Ok(Function::Program(func)),
-                None => Err(ParserError::FunctionNotFound)
+                None => Err(ParserError::FunctionNotFound),
             }
         }
     }
@@ -1437,17 +1864,17 @@ fn get_type_from_expression_internal<'b>(
         let name = self.next_identifier()?;
         let mut chars = name.chars();
         if !chars.all(|c| c.is_ascii_alphanumeric()) {
-            return Err(ParserError::InvalidStructureName(name.to_owned()))
+            return Err(ParserError::InvalidStructureName(name.to_owned()));
         }
 
         // check if the first letter is in uppercase
         match name.chars().nth(0) {
             Some(v) => {
                 if !v.is_ascii_alphabetic() || !v.is_uppercase() {
-                    return Err(ParserError::InvalidStructureName(name.to_owned()))
+                    return Err(ParserError::InvalidStructureName(name.to_owned()));
                 }
-            },
-            None => return Err(ParserError::EmptyStructName)
+            }
+            None => return Err(ParserError::EmptyStructName),
         };
 
         self.expect_token(Token::BraceOpen)?;
@@ -1478,17 +1905,21 @@ fn get_type_from_expression_internal<'b>(
                     let var = self.read_variable(&mut context, true)?;
                     let id = var.id;
                     if !self.constants.insert(var) {
-                        return Err(ParserError::VariableIdAlreadyUsed(id))
+                        return Err(ParserError::VariableIdAlreadyUsed(id));
                     }
-                },
+                }
                 Token::Function => self.read_function(false, &mut context)?,
                 Token::Entry => self.read_function(true, &mut context)?,
                 Token::Struct => self.read_struct()?,
-                token => return Err(ParserError::UnexpectedToken(token))
+                token => return Err(ParserError::UnexpectedToken(token)),
             };
         }
 
-        let program = Program::with(self.constants, self.struct_manager.finalize(), self.functions);
+        let program = Program::with(
+            self.constants,
+            self.struct_manager.finalize(),
+            self.functions,
+        );
         Ok((program, self.functions_mapper))
     }
 }
@@ -1517,7 +1948,12 @@ mod tests {
     }
 
     #[track_caller]
-    fn test_parser_statement_with(tokens: Vec<Token>, variables: Vec<(&str, Type)>, return_type: &Option<Type>, env: EnvironmentBuilder) -> Vec<Statement> {
+    fn test_parser_statement_with(
+        tokens: Vec<Token>,
+        variables: Vec<(&str, Type)>,
+        return_type: &Option<Type>,
+        env: EnvironmentBuilder,
+    ) -> Vec<Statement> {
         let mut parser = Parser::new(VecDeque::from(tokens), &env);
         let mut context = Context::new();
         context.begin_scope();
@@ -1528,7 +1964,11 @@ mod tests {
         parser.read_statements(&mut context, return_type).unwrap()
     }
 
-    fn test_parser_statement_with_return_type(tokens: Vec<Token>, variables: Vec<(&str, Type)>, return_type: Type) -> Vec<Statement> {
+    fn test_parser_statement_with_return_type(
+        tokens: Vec<Token>,
+        variables: Vec<(&str, Type)>,
+        return_type: Type,
+    ) -> Vec<Statement> {
         let env = EnvironmentBuilder::new();
         test_parser_statement_with(tokens, variables, &Some(return_type), env)
     }
@@ -1539,10 +1979,8 @@ mod tests {
             Token::Let,
             Token::Identifier("a"),
             Token::Colon,
-
             Token::Range(Box::new(Token::Number(NumberType::U64))),
             Token::OperatorAssign,
-
             Token::Value(Literal::U64(0)),
             Token::Dot,
             Token::Dot,
@@ -1552,16 +1990,14 @@ mod tests {
         let statements = test_parser_statement(tokens, Vec::new());
         assert_eq!(
             statements[0],
-            Statement::Variable(
-                DeclarationStatement {
-                    id: 0,
-                    value_type: Type::U64,
-                    value: Expression::Range(
-                        Box::new(Expression::Value(Value::U64(0))),
-                        Box::new(Expression::Value(Value::U64(10))),
-                    )
-                }
-            )
+            Statement::Variable(DeclarationStatement {
+                id: 0,
+                value_type: Type::U64,
+                value: Expression::Range(
+                    Box::new(Expression::Value(Value::U64(0))),
+                    Box::new(Expression::Value(Value::U64(10))),
+                )
+            })
         );
     }
 
@@ -1576,7 +2012,7 @@ mod tests {
             Token::Dot,
             Token::Value(Literal::U64(10)),
             Token::BraceOpen,
-            Token::BraceClose
+            Token::BraceClose,
         ];
 
         let statements = test_parser_statement(tokens, Vec::new());
@@ -1603,7 +2039,7 @@ mod tests {
             Token::ParenthesisClose,
             Token::BraceOpen,
             Token::Return,
-            Token::BraceClose
+            Token::BraceClose,
         ];
 
         let program = test_parser(tokens);
@@ -1648,38 +2084,41 @@ mod tests {
             Token::Identifier("len"),
             Token::ParenthesisOpen,
             Token::ParenthesisClose,
-            Token::BraceClose
+            Token::BraceClose,
         ];
 
         let program = test_parser(tokens);
         let statements = vec![
-            Statement::Variable(
-                DeclarationStatement {
-                    id: 0,
-                    value_type: Type::Array(Box::new(Type::U64)),
-                    value: Expression::ArrayConstructor(vec![
-                        Expression::Value(Value::U64(1)),
-                        Expression::Value(Value::U64(2)),
-                        Expression::Value(Value::U64(3))
-                    ])
-                }
-            ),
+            Statement::Variable(DeclarationStatement {
+                id: 0,
+                value_type: Type::Array(Box::new(Type::U64)),
+                value: Expression::ArrayConstructor(vec![
+                    Expression::Value(Value::U64(1)),
+                    Expression::Value(Value::U64(2)),
+                    Expression::Value(Value::U64(3)),
+                ]),
+            }),
             Statement::Return(Some(Expression::Operator(
                 Operator::GreaterThan,
                 Box::new(Expression::Value(Value::U32(0))),
                 Box::new(Expression::FunctionCall(
                     Some(Box::new(Expression::Variable(0))),
                     0,
-                    Vec::new()
-                ))
-            )))
+                    Vec::new(),
+                )),
+            ))),
         ];
 
         assert_eq!(
             *program.functions().get(0).unwrap(),
-            FunctionType::Declared(
-                DeclaredFunction::new(None, None, Vec::new(), statements, Some(Type::Bool), 1)
-            )
+            FunctionType::Declared(DeclaredFunction::new(
+                None,
+                None,
+                Vec::new(),
+                statements,
+                Some(Type::Bool),
+                1
+            ))
         );
     }
 
@@ -1693,7 +2132,7 @@ mod tests {
             Token::BraceOpen,
             Token::Return,
             Token::Value(Literal::U64(0)),
-            Token::BraceClose
+            Token::BraceClose,
         ];
 
         let program = test_parser(tokens);
@@ -1713,7 +2152,7 @@ mod tests {
             Token::ParenthesisOpen,
             Token::ParenthesisClose,
             Token::BraceOpen,
-            Token::BraceClose
+            Token::BraceClose,
         ];
 
         let mut env = EnvironmentBuilder::new();
@@ -1738,7 +2177,7 @@ mod tests {
             Token::ParenthesisClose,
             Token::BraceOpen,
             Token::Return,
-            Token::BraceClose
+            Token::BraceClose,
         ];
 
         let program = test_parser(tokens);
@@ -1757,7 +2196,7 @@ mod tests {
             Token::BraceOpen,
             Token::Return,
             Token::Value(Literal::U64(0)),
-            Token::BraceClose
+            Token::BraceClose,
         ];
 
         let program = test_parser(tokens);
@@ -1773,15 +2212,11 @@ mod tests {
             Token::In,
             Token::Identifier("array"),
             Token::BraceOpen,
-            Token::BraceClose
+            Token::BraceClose,
         ];
 
-        let statements = test_parser_statement(
-            tokens,
-            vec![
-                ("array", Type::Array(Box::new(Type::U64)))
-            ]
-        );
+        let statements =
+            test_parser_statement(tokens, vec![("array", Type::Array(Box::new(Type::U64)))]);
 
         assert_eq!(statements.len(), 1);
     }
@@ -1803,7 +2238,7 @@ mod tests {
             Token::OperatorPlusAssign,
             Token::Value(Literal::U64(1)),
             Token::BraceOpen,
-            Token::BraceClose
+            Token::BraceClose,
         ];
 
         let statements = test_parser_statement(tokens, Vec::new());
@@ -1819,7 +2254,7 @@ mod tests {
             Token::OperatorLessThan,
             Token::Value(Literal::U64(10)),
             Token::BraceOpen,
-            Token::BraceClose
+            Token::BraceClose,
         ];
 
         let statements = test_parser_statement(tokens, vec![("i", Type::U64)]);
@@ -1835,7 +2270,7 @@ mod tests {
             Token::OperatorLessThan,
             Token::Value(Literal::U64(10)),
             Token::BraceOpen,
-            Token::BraceClose
+            Token::BraceClose,
         ];
 
         let statements = test_parser_statement(tokens, vec![("i", Type::U64)]);
@@ -1854,7 +2289,7 @@ mod tests {
             Token::BraceClose,
             Token::Else,
             Token::BraceOpen,
-            Token::BraceClose
+            Token::BraceClose,
         ];
 
         let statements = test_parser_statement(tokens, vec![("i", Type::U64)]);
@@ -1877,7 +2312,7 @@ mod tests {
             Token::OperatorLessThan,
             Token::Value(Literal::U64(20)),
             Token::BraceOpen,
-            Token::BraceClose
+            Token::BraceClose,
         ];
 
         let statements = test_parser_statement(tokens, vec![("i", Type::U64)]);
@@ -1894,39 +2329,45 @@ mod tests {
             Token::Value(Literal::U64(10)),
             Token::BraceOpen,
             Token::BraceClose,
-            Token::Return
+            Token::Return,
         ];
 
         let statements = test_parser_statement(tokens.clone(), vec![("i", Type::U64)]);
-        assert_eq!(statements, vec![
-            Statement::If(
-                Expression::Operator(
-                    Operator::LessThan,
-                    Box::new(Expression::Variable(0)),
-                    Box::new(Expression::Value(Value::U64(10)))
+        assert_eq!(
+            statements,
+            vec![
+                Statement::If(
+                    Expression::Operator(
+                        Operator::LessThan,
+                        Box::new(Expression::Variable(0)),
+                        Box::new(Expression::Value(Value::U64(10)))
+                    ),
+                    Vec::new(),
+                    None
                 ),
-                Vec::new(),
-                None
-            ),
-            Statement::Return(None)
-        ]);
+                Statement::Return(None)
+            ]
+        );
 
         tokens.push(Token::Value(Literal::U64(0)));
 
-
-        let statements = test_parser_statement_with_return_type(tokens, vec![("i", Type::U64)], Type::U64);
-        assert_eq!(statements, vec![
-            Statement::If(
-                Expression::Operator(
-                    Operator::LessThan,
-                    Box::new(Expression::Variable(0)),
-                    Box::new(Expression::Value(Value::U64(10)))
+        let statements =
+            test_parser_statement_with_return_type(tokens, vec![("i", Type::U64)], Type::U64);
+        assert_eq!(
+            statements,
+            vec![
+                Statement::If(
+                    Expression::Operator(
+                        Operator::LessThan,
+                        Box::new(Expression::Variable(0)),
+                        Box::new(Expression::Value(Value::U64(10)))
+                    ),
+                    Vec::new(),
+                    None
                 ),
-                Vec::new(),
-                None
-            ),
-            Statement::Return(Some(Expression::Value(Value::U64(0))))
-        ]);
+                Statement::Return(Some(Expression::Value(Value::U64(0))))
+            ]
+        );
     }
 
     #[test]
@@ -1950,20 +2391,22 @@ mod tests {
             Token::BraceOpen,
             Token::BraceClose,
             Token::Return,
-            Token::Value(Literal::U64(0))
+            Token::Value(Literal::U64(0)),
         ];
 
-        let statements = test_parser_statement_with_return_type(tokens, vec![("i", Type::U64)], Type::U64);
-        assert_eq!(statements, vec![
-            Statement::If(
-                Expression::Operator(
-                    Operator::LessThan,
-                    Box::new(Expression::Variable(0)),
-                    Box::new(Expression::Value(Value::U64(10)))
-                ),
-                Vec::new(),
-                Some(vec![
-                    Statement::If(
+        let statements =
+            test_parser_statement_with_return_type(tokens, vec![("i", Type::U64)], Type::U64);
+        assert_eq!(
+            statements,
+            vec![
+                Statement::If(
+                    Expression::Operator(
+                        Operator::LessThan,
+                        Box::new(Expression::Variable(0)),
+                        Box::new(Expression::Value(Value::U64(10)))
+                    ),
+                    Vec::new(),
+                    Some(vec![Statement::If(
                         Expression::Operator(
                             Operator::LessThan,
                             Box::new(Expression::Variable(0)),
@@ -1971,11 +2414,11 @@ mod tests {
                         ),
                         Vec::new(),
                         Some(Vec::new())
-                    )
-                ])
-            ),
-            Statement::Return(Some(Expression::Value(Value::U64(0))))
-        ]);
+                    )])
+                ),
+                Statement::Return(Some(Expression::Value(Value::U64(0))))
+            ]
+        );
     }
 
     #[test]
@@ -1984,48 +2427,64 @@ mod tests {
         let statements = vec![RETURN];
         assert!(Parser::ends_with_return(&statements).unwrap());
 
-        let statements = vec![RETURN, Statement::Expression(Expression::Value(Value::U64(0)))];
+        let statements = vec![
+            RETURN,
+            Statement::Expression(Expression::Value(Value::U64(0))),
+        ];
         assert!(!Parser::ends_with_return(&statements).unwrap());
 
         // if ... return
-        let statements = vec![Statement::If(Expression::Value(Value::Boolean(true)), Vec::new(), None), RETURN];
+        let statements = vec![
+            Statement::If(Expression::Value(Value::Boolean(true)), Vec::new(), None),
+            RETURN,
+        ];
         assert!(Parser::ends_with_return(&statements).unwrap());
 
-        let statements = vec![Statement::If(Expression::Value(Value::Boolean(true)), Vec::new(), None)];
+        let statements = vec![Statement::If(
+            Expression::Value(Value::Boolean(true)),
+            Vec::new(),
+            None,
+        )];
         assert!(!Parser::ends_with_return(&statements).unwrap());
 
         // if else
-        let statements = vec![Statement::If(Expression::Value(Value::Boolean(true)), Vec::new(), Some(Vec::new()))];
+        let statements = vec![Statement::If(
+            Expression::Value(Value::Boolean(true)),
+            Vec::new(),
+            Some(Vec::new()),
+        )];
         assert!(!Parser::ends_with_return(&statements).unwrap());
 
         // if return else return
-        let statements = vec![
-            Statement::If(Expression::Value(Value::Boolean(true)), vec![RETURN], Some(vec![RETURN]))
-        ];
+        let statements = vec![Statement::If(
+            Expression::Value(Value::Boolean(true)),
+            vec![RETURN],
+            Some(vec![RETURN]),
+        )];
         assert!(Parser::ends_with_return(&statements).unwrap());
 
         // if return else if return else no return
-        let statements = vec![
-            Statement::If(
+        let statements = vec![Statement::If(
+            Expression::Value(Value::Boolean(true)),
+            vec![RETURN],
+            Some(vec![Statement::If(
                 Expression::Value(Value::Boolean(true)),
                 vec![RETURN],
-                Some(vec![
-                    Statement::If(Expression::Value(Value::Boolean(true)), vec![RETURN], None)
-                ])
-            )
-        ];
+                None,
+            )]),
+        )];
         assert!(!Parser::ends_with_return(&statements).unwrap());
 
         // if return else if return else return
-        let statements = vec![
-            Statement::If(
+        let statements = vec![Statement::If(
+            Expression::Value(Value::Boolean(true)),
+            vec![RETURN],
+            Some(vec![Statement::If(
                 Expression::Value(Value::Boolean(true)),
                 vec![RETURN],
-                Some(vec![
-                    Statement::If(Expression::Value(Value::Boolean(true)), vec![RETURN], Some(vec![RETURN]))
-                ])
-            )
-        ];
+                Some(vec![RETURN]),
+            )]),
+        )];
         assert!(Parser::ends_with_return(&statements).unwrap());
     }
 
@@ -2076,7 +2535,7 @@ mod tests {
             Token::Identifier("aaa_message"),
             Token::Colon,
             Token::String,
-            Token::BraceClose
+            Token::BraceClose,
         ];
 
         let program = test_parser(tokens.clone());
@@ -2084,10 +2543,10 @@ mod tests {
 
         // Also test with a environment
         let mut env = EnvironmentBuilder::new();
-        env.register_structure("Message", vec![
-            ("message_id", Type::U64),
-            ("message", Type::String)
-        ]);
+        env.register_structure(
+            "Message",
+            vec![("message_id", Type::U64), ("message", Type::String)],
+        );
 
         // Create a struct instance
         let tokens = vec![
@@ -2105,7 +2564,7 @@ mod tests {
             Token::Identifier("message"),
             Token::Colon,
             Token::Value(Literal::String(Cow::Borrowed("hello"))),
-            Token::BraceClose
+            Token::BraceClose,
         ];
 
         let statements = test_parser_statement_with(tokens, Vec::new(), &None, env);
